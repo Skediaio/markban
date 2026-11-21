@@ -25,6 +25,7 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 | 11 | Agent skill for local and server mode | Open |
 | 12 | `undo`, format v0.2 (assignee, labels, extra keys shown as chips) | Open |
 | 13 | Viewer hosting: one shared password, board from a git repository, Dockerfile | Done 2026-11-21 |
+| 14 | Viewer: syntax highlighting of fenced code in cards (server-side, syntect) | Done 2026-11-21 |
 
 ## Open
 

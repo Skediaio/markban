@@ -44,21 +44,130 @@ pub fn render_markdown(markdown: &str) -> String {
     let mut html = String::new();
     let parser =
         pulldown_cmark::Parser::new_ext(markdown, pulldown_cmark::Options::ENABLE_TASKLISTS);
-    pulldown_cmark::html::push_html(&mut html, parser);
+    pulldown_cmark::html::push_html(&mut html, HighlightFences::new(parser));
     let mut sanitizer = ammonia::Builder::default();
     sanitizer
         .add_tags(["input"])
         .add_tag_attributes("input", ["checked"])
+        .add_tag_attributes("span", ["class"])
+        .add_tag_attributes("code", ["class"])
         .set_tag_attribute_value("input", "type", "checkbox")
         .set_tag_attribute_value("input", "disabled", "")
         .attribute_filter(|element, attribute, value| {
             if element == "img" && attribute == "src" && !is_relative_url(value) {
                 None
+            } else if attribute == "class" {
+                let prefix = match element {
+                    "span" => "hl-",
+                    "code" => "language-",
+                    _ => return None,
+                };
+                let kept: Vec<&str> = value
+                    .split_whitespace()
+                    .filter(|token| token.starts_with(prefix))
+                    .collect();
+                (!kept.is_empty()).then(|| kept.join(" ").into())
             } else {
                 Some(value.into())
             }
         });
     sanitizer.clean(&html).to_string()
+}
+
+fn syntax_set() -> &'static syntect::parsing::SyntaxSet {
+    static SET: OnceLock<syntect::parsing::SyntaxSet> = OnceLock::new();
+    SET.get_or_init(syntect::parsing::SyntaxSet::load_defaults_newlines)
+}
+
+/// Highlights `code` as `lang` (first word of a fence info string) into class-annotated HTML,
+/// or `None` when the language is unknown or highlighting fails.
+fn highlight_fence(lang: &str, code: &str) -> Option<String> {
+    use syntect::html::{ClassStyle, ClassedHTMLGenerator};
+    use syntect::util::LinesWithEndings;
+    let word = lang.split_whitespace().next()?;
+    let token = match word.to_ascii_lowercase().as_str() {
+        "ts" | "tsx" | "typescript" | "jsx" => "js".to_string(),
+        "svelte" | "vue" => "html".to_string(),
+        "sh" | "zsh" | "shell" => "bash".to_string(),
+        other => other.to_string(),
+    };
+    let set = syntax_set();
+    let syntax = set.find_syntax_by_token(&token).or_else(|| {
+        (token == "bash")
+            .then(|| set.find_syntax_by_token("sh"))
+            .flatten()
+    })?;
+    let mut generator = ClassedHTMLGenerator::new_with_class_style(
+        syntax,
+        set,
+        ClassStyle::SpacedPrefixed { prefix: "hl-" },
+    );
+    for line in LinesWithEndings::from(code) {
+        generator
+            .parse_html_for_line_which_includes_newline(line)
+            .ok()?;
+    }
+    let body = generator.finalize();
+    let class = if word
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '-'))
+    {
+        format!(" class=\"language-{word}\"")
+    } else {
+        String::new()
+    };
+    Some(format!("<pre><code{class}>{body}</code></pre>\n"))
+}
+
+/// Event adapter that replaces fenced code blocks of a known language with highlighted HTML.
+/// Everything else passes through for pulldown-cmark to render.
+struct HighlightFences<'a, I: Iterator<Item = pulldown_cmark::Event<'a>>> {
+    inner: I,
+    pending: std::collections::VecDeque<pulldown_cmark::Event<'a>>,
+}
+
+impl<'a, I: Iterator<Item = pulldown_cmark::Event<'a>>> HighlightFences<'a, I> {
+    fn new(inner: I) -> Self {
+        Self {
+            inner,
+            pending: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl<'a, I: Iterator<Item = pulldown_cmark::Event<'a>>> Iterator for HighlightFences<'a, I> {
+    type Item = pulldown_cmark::Event<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd};
+        if let Some(event) = self.pending.pop_front() {
+            return Some(event);
+        }
+        let event = self.inner.next()?;
+        let Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) = &event else {
+            return Some(event);
+        };
+        let lang = lang.clone();
+        let mut code = String::new();
+        let mut buffered = vec![event];
+        for next in self.inner.by_ref() {
+            let end = matches!(next, Event::End(TagEnd::CodeBlock));
+            if let Event::Text(text) = &next {
+                code.push_str(text);
+            }
+            buffered.push(next);
+            if end {
+                break;
+            }
+        }
+        match highlight_fence(&lang, &code) {
+            Some(html) => Some(Event::Html(html.into())),
+            None => {
+                self.pending.extend(buffered);
+                self.pending.pop_front()
+            }
+        }
+    }
 }
 
 type BoardDebouncer = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
@@ -615,5 +724,67 @@ mod tests {
             .await
             .expect("revision bumped in time")
             .expect("sender alive");
+    }
+
+    #[test]
+    fn highlights_rust_fences() {
+        let html = render_markdown("```rust\nfn main() {}\n```\n");
+        assert!(html.contains("<span class=\"hl-"), "{html}");
+        assert!(html.contains("language-rust"), "{html}");
+    }
+
+    #[test]
+    fn highlights_bash_and_js_fences() {
+        for md in [
+            "```bash\necho \"hi\" # c\n```\n",
+            "```js\nconst a = 1;\n```\n",
+        ] {
+            let html = render_markdown(md);
+            assert!(html.contains("<span class=\"hl-"), "{html}");
+        }
+        let html = render_markdown("```ts\nconst a = 1;\n```\n");
+        assert!(html.contains("<span class=\"hl-"), "{html}");
+    }
+
+    #[test]
+    fn unknown_or_missing_lang_stays_plain() {
+        for md in [
+            "```nosuchlang\na < b\n```\n",
+            "```\na < b\n```\n",
+            "    a < b\n",
+        ] {
+            let html = render_markdown(md);
+            assert!(!html.contains("hl-"), "{html}");
+            assert!(html.contains("a &lt; b"), "{html}");
+        }
+    }
+
+    #[test]
+    fn code_block_content_stays_escaped() {
+        let html = render_markdown("```rust\n</code><script>alert(1)</script>\n```\n");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(html.contains("&lt;"), "{html}");
+    }
+
+    #[test]
+    fn class_attributes_are_filtered() {
+        let html = render_markdown("<span class=\"evil hl-x\" onclick=\"x()\">a</span>");
+        assert!(html.contains("class=\"hl-x\""), "{html}");
+        assert!(
+            !html.contains("evil") && !html.contains("onclick"),
+            "{html}"
+        );
+        let html = render_markdown("<code class=\"language-x evil\">a</code>");
+        assert!(html.contains("class=\"language-x\""), "{html}");
+        assert!(!html.contains("evil"), "{html}");
+        let html = render_markdown("<code class=\"evil\">a</code>");
+        assert!(!html.contains("class") && !html.contains("evil"), "{html}");
+    }
+
+    #[test]
+    fn garbage_lang_injects_nothing() {
+        let html = render_markdown("```\"><img src=x>\nfoo\n```\n");
+        assert!(!html.contains("<img"), "{html}");
+        assert!(!html.contains("onerror"), "{html}");
     }
 }

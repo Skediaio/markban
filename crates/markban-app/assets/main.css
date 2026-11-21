@@ -11,6 +11,13 @@
   --error-bg: #fde4e4;
   --error-text: #7a1c1c;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+  --hl-comment: #6e7781;
+  --hl-keyword: #cf222e;
+  --hl-string: #0a3069;
+  --hl-number: #0550ae;
+  --hl-function: #8250df;
+  --hl-type: #953800;
+  --hl-variable: #116329;
   color-scheme: light dark;
 }
 
@@ -23,6 +30,13 @@
     --muted: #9aa5b6;
     --border: #2e3745;
     --accent: #6ea0ff;
+    --hl-comment: #8b949e;
+    --hl-keyword: #ff7b72;
+    --hl-string: #a5d6ff;
+    --hl-number: #79c0ff;
+    --hl-function: #d2a8ff;
+    --hl-type: #ffa657;
+    --hl-variable: #7ee787;
     --warn-bg: #3a2f10;
     --warn-text: #f3d98b;
     --error-bg: #3d1a1a;
@@ -148,6 +162,14 @@ body {
 .markdown pre { overflow-x: auto; background: var(--column); padding: 10px; border-radius: 6px; }
 .markdown code { font-family: ui-monospace, monospace; font-size: 0.9em; }
 .markdown img { max-width: 100%; }
+.markdown .hl-comment { color: var(--hl-comment); font-style: italic; }
+.markdown .hl-keyword, .markdown .hl-storage { color: var(--hl-keyword); }
+.markdown .hl-string { color: var(--hl-string); }
+.markdown .hl-constant { color: var(--hl-number); }
+.markdown .hl-entity.hl-name.hl-function, .markdown .hl-support.hl-function { color: var(--hl-function); }
+.markdown .hl-entity.hl-name.hl-type, .markdown .hl-support.hl-type, .markdown .hl-entity.hl-name.hl-tag { color: var(--hl-type); }
+.markdown .hl-variable { color: var(--hl-variable); }
+.markdown .hl-entity.hl-other.hl-attribute-name { color: var(--hl-function); }
 
 @media (max-width: 600px) {
   .app { padding: 12px; }
