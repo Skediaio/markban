@@ -1,0 +1,12 @@
+target
+.worktrees
+.git
+node_modules
+packages
+docs
+research
+skills
+spec
+examples
+.claude
+.env*

@@ -230,15 +230,63 @@ pub struct State {
 
 static STATE: OnceLock<State> = OnceLock::new();
 
-/// The shared state; created on first use from `MARKBAN_BOARD` (default: current directory).
+/// The board directory inside the git clone, when the board comes from `MARKBAN_GIT_URL`.
+static GIT_BOARD: OnceLock<PathBuf> = OnceLock::new();
+
+/// With `MARKBAN_GIT_URL` set: clones (or updates) the repository once, then keeps it in sync
+/// in the background. A failed first sync is logged and retried; the server still starts.
+///
+/// # Errors
+/// A message when the git settings are invalid.
+pub fn start_git() -> Result<(), String> {
+    let Some(source) = crate::git::GitSource::from_env()? else {
+        return Ok(());
+    };
+    let _ = GIT_BOARD.set(source.board_dir());
+    if let Err(e) = source.sync() {
+        eprintln!("markban: git sync failed, retrying: {e}");
+    }
+    crate::git::spawn(source);
+    Ok(())
+}
+
+/// Probes `GET /healthz` on this host's `PORT` (default 8080). True when it answers `ok`.
+#[must_use]
+pub fn healthcheck() -> bool {
+    use std::io::{Read, Write};
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(8080);
+    let timeout = Some(Duration::from_secs(3));
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(3)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(timeout);
+    let _ = stream.set_write_timeout(timeout);
+    if stream
+        .write_all(b"GET /healthz HTTP/1.0\r\nHost: localhost\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut answer = String::new();
+    let _ = stream.take(4096).read_to_string(&mut answer);
+    answer.split_whitespace().nth(1) == Some("200") && answer.ends_with("ok")
+}
+
+/// The shared state; created on first use from the git clone (`MARKBAN_GIT_URL`) or else
+/// `MARKBAN_BOARD` (default: current directory).
 /// A failed start is not cached: the next request tries again.
 ///
 /// # Errors
 /// A message when the watcher cannot start.
 pub fn state() -> Result<&'static State, String> {
     let state = init_or_retry(&STATE, || {
-        let dir =
-            std::env::var_os("MARKBAN_BOARD").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let dir = GIT_BOARD.get().cloned().unwrap_or_else(|| {
+            std::env::var_os("MARKBAN_BOARD").map_or_else(|| PathBuf::from("."), PathBuf::from)
+        });
         let (watcher, rx) = Watcher::start(&dir)?;
         Ok(State { dir, rx, watcher })
     })?;
