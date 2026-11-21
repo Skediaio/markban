@@ -5,6 +5,7 @@
 //! round-trip byte for byte; a mutation changes only the lines it must.
 
 pub mod board;
+pub mod command;
 pub mod diagnostic;
 pub mod frontmatter;
 pub mod fs;
@@ -15,5 +16,6 @@ mod id;
 pub mod view;
 
 pub use check::check;
+pub use command::{Command, CommandError, Outcome, execute, execute_batch};
 pub use id::{is_valid_id, slug};
 pub use view::view;
