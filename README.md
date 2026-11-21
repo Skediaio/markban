@@ -42,6 +42,26 @@ Version 0.0.0: format spec v0.1 is settled, chosen by measurement
 - **Example board**: [`examples/demo-board`](examples/demo-board)
 - **Rules for agents and contributors**: [`AGENTS.md`](AGENTS.md)
 
+## Server mode
+
+For live, shared boards without git, `markban serve` hosts several boards from one data directory. Each user or
+agent gets a token that lists the boards it may use; every change is a command, run one at a time per board, and
+logged. Agents keep using the same CLI by pointing it at the server:
+
+```sh
+markban server init /srv/markban            # prints the first admin token once
+markban server --data /srv/markban board add kuuno "Kuuno" Todo Doing Done
+markban server --data /srv/markban user add designer-anna --boards kuuno   # prints her token once
+markban serve --data /srv/markban           # http://127.0.0.1:7171
+
+export MARKBAN_URL=http://127.0.0.1:7171 MARKBAN_TOKEN=mb_... MARKBAN_BOARD=kuuno
+markban ls
+markban add "Draft the landing page" -c Doing
+markban log -n 5
+```
+
+See [`spec/SPEC.md`](spec/SPEC.md) section 9 for the data layout, the HTTP API and access rules.
+
 ## Planned layout
 
 Dependencies point downwards only.
@@ -49,7 +69,8 @@ Dependencies point downwards only.
 | Path | What it is |
 |---|---|
 | `crates/markban-app` | The viewer: Dioxus fullstack, read-only, live refresh. |
-| `crates/markban-cli` | `markban`: `check`, commands, batch `run`. |
+| `crates/markban-cli` | `markban`: `check`, commands, batch `run`, remote mode, `serve`. |
+| `crates/markban-server` | The server: data directory, `access.toml`, HTTP API, log. |
 | `crates/markban-core` | Lossless parser and writer, checks, commands. No UI. |
 
 ## Licence

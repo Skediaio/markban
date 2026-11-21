@@ -65,6 +65,10 @@ pub enum Command {
         description: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         append: Option<String>,
+        /// Optimistic check: the SHA-256 (hex) of the card file as last read (`show --json`
+        /// gives it). A mismatch refuses the edit with [`CommandError::CardChanged`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        if_unchanged: Option<String>,
     },
     #[serde(rename = "card.remove")]
     CardRemove { id: String },
@@ -142,6 +146,10 @@ pub enum CommandError {
         "column '{column}' still has {count} card(s); move or remove them first, or pass `move_to` with another column"
     )]
     ColumnInUse { column: String, count: usize },
+    #[error(
+        "card '{id}' changed since it was read (`if_unchanged` does not match); show it again and retry"
+    )]
+    CardChanged { id: String },
     #[error("card '{id}' has no valid frontmatter (E006); fix the file by hand first")]
     CardBroken { id: String },
     #[error("board.init needs a directory without board.md; this board already exists")]
@@ -306,6 +314,7 @@ fn apply_command(board: &mut Board, cmd: &Command) -> Result<Outcome, CommandErr
             title,
             description,
             append,
+            if_unchanged,
         } => {
             card_edit(
                 board,
@@ -313,6 +322,7 @@ fn apply_command(board: &mut Board, cmd: &Command) -> Result<Outcome, CommandErr
                 title.as_deref(),
                 description.as_deref(),
                 append.as_deref(),
+                if_unchanged.as_deref(),
             )?;
             id.clone()
         }
@@ -663,6 +673,7 @@ fn card_edit(
     title: Option<&str>,
     description: Option<&str>,
     append: Option<&str>,
+    if_unchanged: Option<&str>,
 ) -> Result<(), CommandError> {
     if title.is_none() && description.is_none() && append.is_none() {
         return Err(CommandError::Invalid(
@@ -672,10 +683,23 @@ fn card_edit(
     if let Some(title) = title {
         one_line("title", title)?;
     }
+    if let Some(expected) = if_unchanged
+        && (expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(CommandError::Invalid(
+            "`if_unchanged` must be the 64 hex digit sha256 of the card, as `show --json` prints it"
+                .into(),
+        ));
+    }
     let card = board
         .cards
         .get_mut(id)
         .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
+    if let Some(expected) = if_unchanged
+        && !crate::sha256_hex(&card.to_bytes()).eq_ignore_ascii_case(expected)
+    {
+        return Err(CommandError::CardChanged { id: id.to_string() });
+    }
     let eol = broken(card)?.dominant_eol();
     if let Some(title) = title {
         set(card, "title", title)?;

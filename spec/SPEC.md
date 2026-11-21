@@ -162,7 +162,7 @@ Column parameters accept an id or a name (case-insensitive). Positions are ancho
 | `board.init` | `title`, `columns` (names) |
 | `card.add` | `title`, `column?` (default: first), `description?`, `id?`, position† |
 | `card.move` | `id`, `column?`, position† |
-| `card.edit` | `id`, `title?`, `description?`, `append?` |
+| `card.edit` | `id`, `title?`, `description?`, `append?`, `if_unchanged?`‡ |
 | `card.remove` | `id` |
 | `column.add` | `name`, `id?`, `before?` (column; default: end) |
 | `column.rename` | `column`, `name` |
@@ -170,6 +170,9 @@ Column parameters accept an id or a name (case-insensitive). Positions are ancho
 | `column.remove` | `column`, `move_to?` (column) |
 
 † Position: one of `top: true`, `before: <card id>`, `after: <card id>`; default the end of the column.
+
+‡ `if_unchanged`: the SHA-256 (64 hex digits) of the card file as last read; `markban show --json` prints it as
+`sha256`. When the card changed since, the edit is refused as contention (exit code 3) and nothing is written.
 
 When a tool picks an `order` between two neighbours, it takes the midpoint and moves it by a small offset
 derived from the card id, so two writers inserting into the same gap at once get different, deterministic
@@ -207,8 +210,79 @@ Exit codes:
 | 0 | Success (`check`: no errors; warnings are fine). |
 | 1 | Invalid input or the command was refused: fix the input. `check` also uses 1 when the board has errors. |
 | 2 | Usage error (unknown option, missing argument). |
-| 3 | Contention: another writer changed the board while the command ran, or the board lock could not be taken within the timeout. Nothing was written; retry. |
+| 3 | Contention: another writer changed the board while the command ran, the board lock could not be taken within the timeout, or `if_unchanged` did not match. Nothing was written; retry (after reading the card again). |
 | 4 | Partially applied: some files were written before a failure. Run `markban check` and inspect before retrying. |
+
+## 9. Server mode
+
+`markban serve` hosts several boards for people and agents without git. The board files stay the database;
+the server runs every change as a command, one at a time per board, with the same lock and compare and swap.
+
+**Data directory** (`markban serve --data <DIR>`, default `$MARKBAN_DATA`, else the current directory):
+
+```
+access.toml          users, their token hashes and boards
+boards/<board-id>/   one ordinary board each (sections 1 to 8 apply unchanged)
+log/<board-id>.jsonl append-only log, outside the board so it never shows up as a card
+```
+
+A board id is `[a-z0-9]+(-[a-z0-9]+)*`, at most 64 characters. A symbolic link in `boards/` is not a board.
+
+**Access.** `access.toml` lists users:
+
+```toml
+[users.maarten]
+token_sha256 = "<64 hex digits>"
+boards = ["*"]          # every board
+admin = true            # reserved for administration from the browser
+[users.designer-anna]
+token_sha256 = "<64 hex digits>"
+boards = ["kuuno"]
+```
+
+A token is 32 random bytes (`mb_` and 64 hex digits), shown once and stored only as its SHA-256; hashes are
+compared in constant time. The server reads `access.toml` on every request, so changes apply at once; a file it
+cannot parse refuses every request. A board the user may not use answers exactly like a board that does not
+exist.
+
+**Administration** runs on the server with direct file access, never over HTTP:
+
+```
+markban server init <DIR> [--admin NAME]          # layout plus a first user with "*"; prints its token
+markban server user add <name> --boards a,b [--admin]   # prints the new token once
+markban server user remove <name>
+markban server user boards <name> a,b             # or * for all boards
+markban server board add <id> "Title" COL...      # board.init in boards/<id>
+markban server board list
+```
+
+The `server` commands take `--data <DIR>` (default `$MARKBAN_DATA`, else the current directory) and edit
+`access.toml` atomically, keeping comments and unknown keys.
+
+**API.** Every request needs `Authorization: Bearer <token>`; a missing or wrong token is 401. The server binds
+`127.0.0.1:7171` by default (`--listen`) and answers 403 to a `Host` header that is not loopback or listed in
+`MARKBAN_ALLOWED_HOSTS` (comma separated; set it behind a reverse proxy, which also terminates TLS).
+
+| Request | Answer |
+|---|---|
+| `GET /api/boards` | `[{"id","title"}]`, the boards the token may use |
+| `GET /api/boards/<id>` | the board view, as `markban ls --json` |
+| `GET /api/boards/<id>/cards/<card>` | the card, as `markban show --json` |
+| `POST /api/boards/<id>/run` | body: a JSON array of commands, all or nothing; `{"outcomes":[{"id"}]}` |
+| `GET /api/boards/<id>/log?limit=N` | the last N log entries (default 50, at most 1000), newest last |
+
+An error is `{"error": "<one line>", "code": <exit code>, "index": <failing command>?}` with HTTP status 400
+(code 1), 409 (code 3), 500 (code 4 or a server fault), 401, 404 (unknown board, card or endpoint) or 413. A
+request body may hold at most 1 MiB and 1000 commands.
+
+**Log.** Each successful command appends one line: `{"ts":"<RFC 3339 UTC>","user":"<name>","cmd":{…},"outcome":"<id>"}`.
+
+**CLI remote mode.** With `MARKBAN_URL` (or `--url`) set, every board command (`ls`, `show`, `add`, `mv`,
+`edit`, `rm`, `col`, `init`, `run`, `check`) sends the same commands to the server and prints the same output
+with the same exit codes as locally. The token comes from `MARKBAN_TOKEN` (`--token` works but shows in the
+process list); the board from `-b <id>` or `MARKBAN_BOARD`, which is a board id in remote mode and a
+directory locally. `-C` is refused in remote mode. Two commands only work remotely: `markban boards [--json]`
+and `markban log [-n N]` (JSON lines). A network failure is one line with exit code 1.
 
 ## Reserved for later versions
 

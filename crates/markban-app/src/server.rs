@@ -2,12 +2,13 @@
 
 use crate::api::CardDetail;
 use dioxus::server::axum::extract::Request;
-use dioxus::server::axum::http::{StatusCode, header::HOST};
+use dioxus::server::axum::http::StatusCode;
 use dioxus::server::axum::middleware::Next;
 use dioxus::server::axum::response::{IntoResponse, Response};
 use markban_core::board::Board;
 use markban_core::diagnostic::{Code, Diagnostic};
 use markban_core::view::{BoardView, view};
+use markban_server::{host_allowed, parse_hosts, request_host};
 use notify_debouncer_full::notify::{self, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::path::{Path, PathBuf};
@@ -188,43 +189,6 @@ fn is_board_path(root: &Path, path: &Path) -> bool {
     }
 }
 
-/// The host name (lower case, IPv6 keeps its brackets) of a `Host` header value, when the value
-/// is well formed: `name`, or `name:port`, or `[v6]`, or `[v6]:port`.
-fn host_name(host: &str) -> Option<String> {
-    let (name, port) = if host.starts_with('[') {
-        let end = host.find(']')?;
-        let (name, tail) = host.split_at(end + 1);
-        (name, tail.strip_prefix(':'))
-    } else {
-        match host.split_once(':') {
-            Some((name, port)) => (name, Some(port)),
-            None => (host, None),
-        }
-    };
-    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
-    (port_ok && !name.is_empty()).then(|| name.to_ascii_lowercase())
-}
-
-/// Whether a request's `Host` header may be served: loopback names (any port), or an entry of
-/// `extra` (a host name, or `name:port`). This blocks DNS rebinding.
-#[must_use]
-pub fn host_allowed(host: &str, extra: &[String]) -> bool {
-    let Some(name) = host_name(host) else {
-        return false;
-    };
-    let full = host.to_ascii_lowercase();
-    matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
-        || extra.iter().any(|e| *e == name || *e == full)
-}
-
-/// Parses a comma separated host list (as in `MARKBAN_ALLOWED_HOSTS`) into lower-case entries.
-fn parse_hosts(list: &str) -> Vec<String> {
-    list.split(',')
-        .map(|h| h.trim().to_ascii_lowercase())
-        .filter(|h| !h.is_empty())
-        .collect()
-}
-
 /// Extra allowed hosts from `MARKBAN_ALLOWED_HOSTS`, read once.
 fn extra_hosts() -> &'static [String] {
     static EXTRA: OnceLock<Vec<String>> = OnceLock::new();
@@ -233,13 +197,7 @@ fn extra_hosts() -> &'static [String] {
 
 /// Middleware: answers 403 unless the request's `Host` is allowed (see [`host_allowed`]).
 pub async fn host_guard(request: Request, next: Next) -> Response {
-    let host = request
-        .headers()
-        .get(HOST)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned)
-        .or_else(|| request.uri().authority().map(ToString::to_string));
-    if host.is_some_and(|h| host_allowed(&h, extra_hosts())) {
+    if request_host(&request).is_some_and(|h| host_allowed(&h, extra_hosts())) {
         next.run(request).await
     } else {
         (
@@ -435,42 +393,6 @@ mod tests {
         assert!(!html.contains("text"), "{html}");
         assert!(!html.contains("name="), "{html}");
         assert!(!html.contains("onfocus"), "{html}");
-    }
-
-    #[test]
-    fn host_check_allows_loopback_only_by_default() {
-        for ok in [
-            "localhost",
-            "localhost:8080",
-            "LOCALHOST:3000",
-            "127.0.0.1",
-            "127.0.0.1:8080",
-            "[::1]",
-            "[::1]:8080",
-        ] {
-            assert!(host_allowed(ok, &[]), "{ok}");
-        }
-        for bad in [
-            "",
-            "evil.example",
-            "evil.example:8080",
-            "localhost.evil.example",
-            "127.0.0.1.evil.example",
-            "localhost:80:80",
-            "[::1",
-            "::1",
-        ] {
-            assert!(!host_allowed(bad, &[]), "{bad}");
-        }
-    }
-
-    #[test]
-    fn host_check_honours_the_extra_list() {
-        let extra = parse_hosts(" board.lan, Other.Example ,,");
-        assert!(host_allowed("board.lan", &extra));
-        assert!(host_allowed("board.lan:8080", &extra));
-        assert!(host_allowed("other.example:1", &extra));
-        assert!(!host_allowed("evil.example", &extra));
     }
 
     #[test]

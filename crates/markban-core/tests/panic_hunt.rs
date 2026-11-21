@@ -97,14 +97,15 @@ fn command() -> impl Strategy<Value = Command> {
                 after
             }
         ),
-        (text(), opt(), opt(), opt()).prop_map(|(id, title, description, append)| {
-            Command::CardEdit {
+        (text(), opt(), opt(), opt(), opt()).prop_map(
+            |(id, title, description, append, if_unchanged)| Command::CardEdit {
                 id,
                 title,
                 description,
                 append,
+                if_unchanged,
             }
-        }),
+        ),
         text().prop_map(|id| Command::CardRemove { id }),
         (text(), opt(), opt()).prop_map(|(name, id, before)| Command::ColumnAdd {
             name,

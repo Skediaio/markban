@@ -19,8 +19,10 @@ error messages.
 
 ## 2. Layout
 
-Dependencies point downwards only: `markban-app` → `markban-cli` → `markban-core`. The core has no UI, no
-network and no file watching. The viewer never writes a board.
+Dependencies point downwards only: `markban-cli` → `markban-server` → `markban-core`, and `markban-app` →
+`markban-server` (for the shared `Host` check). The core has no UI, no network and no file watching. The
+server adds authentication, access per board and the log around `fs::run`, never board logic. The viewer never
+writes a board.
 
 ## 3. Golden rules
 

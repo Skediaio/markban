@@ -4,6 +4,15 @@ Decisions taken, newest first, each with its reason. Open decisions at the botto
 
 ## Taken
 
+### 2026-11-21: The server API lives in its own crate, `markban-server`, served by `markban serve`
+
+The API is a small axum router in `markban-server` (the axum 0.8 that Dioxus fullstack already pulls in), and
+the `markban` binary serves it. Putting it inside `markban-app` would make the CLI depend on the Dioxus viewer
+(the wrong direction) and would need `dx` and a WASM build to test the access rules; as a plain library the
+CLI's remote-mode tests run a real server in-process on an ephemeral port. Milestone 9 mounts the same router
+in the viewer, which already uses the crate for its `Host` check. Admin commands edit `access.toml` on disk
+and never go over HTTP; the `admin` flag is stored for the browser administration of milestone 9.
+
 ### 2026-11-21: A markban server for live, shared boards without git
 
 Agents struggle with abstractions such as git workflows and external trackers. `markban serve` hosts several

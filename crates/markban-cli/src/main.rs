@@ -1,23 +1,28 @@
 //! The `markban` binary: a thin layer that turns arguments into core commands.
+//!
+//! Locally the commands run on a board directory; with `MARKBAN_URL` (remote mode) the same
+//! commands go to a markban server, with the same output and exit codes.
 
 mod cli;
+mod remote;
 
 use clap::Parser;
-use cli::{Cli, Cmd, ColCmd, Position};
+use cli::{BoardCmd, Cli, Cmd, ColCmd, Position, ServerCmd, UserCmd};
 use markban_core::Command;
 use markban_core::diagnostic::Severity;
-use markban_core::fs::{self, ApplyError, RunError};
-use markban_core::view::{self, BoardView};
+use markban_core::fs::{self, RunError};
+use markban_core::view::{self, BoardView, CardDetail};
+use markban_server::access;
+use remote::{Remote, RemoteError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use markban_core::fs::EXIT_INVALID;
 /// Exit codes: 0 ok; 1 invalid input or command refused (fix the input); 2 usage (clap);
-/// 3 contention (another writer changed the board; safe to retry).
-const EXIT_INVALID: u8 = 1;
-const EXIT_CONTENDED: u8 = 3;
-/// Some files were written before a failure: inspect the board, do not retry blindly.
-const EXIT_PARTIAL: u8 = 4;
+/// 3 contention (another writer changed the board; safe to retry); 4 partially applied.
+#[cfg(test)]
+use markban_core::fs::{EXIT_CONTENDED, EXIT_PARTIAL};
 
 /// A failure to report: a one-line message and the exit code.
 struct Fail {
@@ -34,16 +39,18 @@ impl From<String> for Fail {
     }
 }
 
-/// The exit code for a failed run (spec section 8): contention, the board lock and conflicts are
-/// retryable (3), a partial write needs inspection (4), everything else needs a different input (1).
-fn exit_code_for(error: &RunError) -> u8 {
-    match error {
-        RunError::Contended { .. }
-        | RunError::Locked { .. }
-        | RunError::Apply(ApplyError::Conflict { .. }) => EXIT_CONTENDED,
-        RunError::PartiallyApplied { .. } => EXIT_PARTIAL,
-        _ => EXIT_INVALID,
+impl From<RemoteError> for Fail {
+    fn from(error: RemoteError) -> Self {
+        Self {
+            message: error.message,
+            code: error.code,
+        }
     }
+}
+
+/// The exit code for a failed run (spec section 8), see [`RunError::exit_code`].
+fn exit_code_for(error: &RunError) -> u8 {
+    error.exit_code()
 }
 
 fn main() -> ExitCode {
@@ -92,6 +99,10 @@ fn cwd() -> Result<PathBuf, Fail> {
     Ok(std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?)
 }
 
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
 /// `-C`, else `MARKBAN_BOARD`, else the nearest directory upwards with a `board.md`.
 fn discover(flag: Option<&Path>) -> Result<PathBuf, Fail> {
     if let Some(dir) = flag {
@@ -125,38 +136,162 @@ fn text_arg(value: Option<String>) -> Result<Option<String>, Fail> {
     }
 }
 
+/// Where the board commands go: a directory (`-C`, discovered when absent) or a server board.
+enum Target {
+    Local(Option<PathBuf>),
+    Remote(Remote),
+}
+
+/// Remote mode when `--url` or `MARKBAN_URL` is set; local mode otherwise.
+fn target(
+    dir: Option<PathBuf>,
+    url: Option<String>,
+    token: Option<String>,
+    board: Option<String>,
+) -> Result<Target, Fail> {
+    let Some(url) = url.or_else(|| env_var("MARKBAN_URL")) else {
+        if board.is_some() {
+            return Err(Fail::from(
+                "-b names a board on a markban server; set MARKBAN_URL, or use -C <dir> for a local board".to_string(),
+            ));
+        }
+        return Ok(Target::Local(dir));
+    };
+    if dir.is_some() {
+        return Err(Fail::from(
+            "-C is a local board directory; in remote mode (MARKBAN_URL) pick the board with -b <id>"
+                .to_string(),
+        ));
+    }
+    let token = token.or_else(|| env_var("MARKBAN_TOKEN")).ok_or_else(|| {
+        Fail::from(
+            "remote mode needs a token; set MARKBAN_TOKEN (or unset MARKBAN_URL)".to_string(),
+        )
+    })?;
+    let board = board.or_else(|| env_var("MARKBAN_BOARD"));
+    Ok(Target::Remote(Remote::new(&url, token, board)?))
+}
+
+/// The message for a refused command: `line N:` in front when it came from a script.
+fn command_message(message: String, index: Option<usize>, line_of: Option<&[usize]>) -> String {
+    match index.and_then(|i| line_of.and_then(|l| l.get(i))) {
+        Some(line) => format!("line {line}: {message}"),
+        None => message,
+    }
+}
+
+fn print_outcomes(ids: impl IntoIterator<Item = String>) {
+    let mut text = String::new();
+    for id in ids {
+        text.push_str(&id);
+        text.push('\n');
+    }
+    emit(&text);
+}
+
 /// Runs the commands through the core and prints one affected id per line.
 /// `line_of` maps command index to script line, for `run`.
 fn apply(dir: &Path, commands: &[Command], line_of: Option<&[usize]>) -> Result<(), Fail> {
     let outcomes = fs::run(dir, commands).map_err(|error| {
         let code = exit_code_for(&error);
         let message = match error {
-            RunError::Command { index, source } => match line_of.and_then(|l| l.get(index)) {
-                Some(line) => format!("line {line}: {source}"),
-                None => source.to_string(),
-            },
+            RunError::Command { index, source } => {
+                command_message(source.to_string(), Some(index), line_of)
+            }
             other => other.to_string(),
         };
         Fail { message, code }
     })?;
-    let mut text = String::new();
-    for outcome in outcomes {
-        text.push_str(&outcome.id);
-        text.push('\n');
-    }
-    emit(&text);
+    print_outcomes(outcomes.into_iter().map(|o| o.id));
     Ok(())
 }
 
-fn one(cli_dir: Option<&Path>, command: Command) -> Result<(), Fail> {
-    apply(&discover(cli_dir)?, &[command], None)
+/// [`apply`] on a server board.
+fn apply_remote(
+    remote: &Remote,
+    commands: &[Command],
+    line_of: Option<&[usize]>,
+) -> Result<(), Fail> {
+    let ids = remote.run(commands).map_err(|error| Fail {
+        code: error.code,
+        message: command_message(error.message, error.index, line_of),
+    })?;
+    print_outcomes(ids);
+    Ok(())
+}
+
+impl Target {
+    fn run(&self, commands: &[Command], line_of: Option<&[usize]>) -> Result<(), Fail> {
+        match self {
+            Self::Local(dir) => apply(&discover(dir.as_deref())?, commands, line_of),
+            Self::Remote(remote) => apply_remote(remote, commands, line_of),
+        }
+    }
+
+    fn view(&self) -> Result<BoardView, Fail> {
+        match self {
+            Self::Local(dir) => {
+                let (board, diagnostics) = load(&discover(dir.as_deref())?)?;
+                let mut board_view = view::view(&board);
+                board_view.diagnostics = diagnostics;
+                Ok(board_view)
+            }
+            Self::Remote(remote) => Ok(remote.view()?),
+        }
+    }
+
+    fn card(&self, id: &str) -> Result<CardDetail, Fail> {
+        match self {
+            Self::Local(dir) => {
+                let (board, _) = load(&discover(dir.as_deref())?)?;
+                view::card(&board, id).ok_or_else(|| {
+                    Fail::from(format!(
+                        "no card '{id}'; card ids are the file names in cards/ without .md"
+                    ))
+                })
+            }
+            Self::Remote(remote) => Ok(remote.card(id)?),
+        }
+    }
+
+    fn remote(&self, what: &str) -> Result<&Remote, Fail> {
+        match self {
+            Self::Remote(remote) => Ok(remote),
+            Self::Local(_) => Err(Fail::from(format!(
+                "`markban {what}` is only available on a markban server; set MARKBAN_URL and MARKBAN_TOKEN"
+            ))),
+        }
+    }
 }
 
 fn dispatch(cli: Cli) -> Result<ExitCode, Fail> {
-    let dir = cli.dir.as_deref();
     match cli.command {
-        Cmd::Ls { column, json } => ls(&discover(dir)?, column.as_deref(), json)?,
-        Cmd::Show { id, json } => show(&discover(dir)?, &id, json)?,
+        Cmd::Serve { data, listen } => {
+            let config = markban_server::Config {
+                data: data_dir(data)?,
+                allowed_hosts: markban_server::parse_hosts(
+                    &std::env::var("MARKBAN_ALLOWED_HOSTS").unwrap_or_default(),
+                ),
+            };
+            markban_server::serve(config, &listen)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Cmd::Server { data, command } => {
+            server_admin(data, command)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        command => {
+            let target = target(cli.dir, cli.url, cli.token, cli.board)?;
+            board_command(&target, command)
+        }
+    }
+}
+
+fn board_command(target: &Target, command: Cmd) -> Result<ExitCode, Fail> {
+    let one = |command: Command| target.run(&[command], None);
+    match command {
+        Cmd::Ls { column, json } => ls(&target.view()?, column.as_deref(), json)?,
+        Cmd::Show { id, json } => show(&target.card(&id)?, json)?,
         Cmd::Add {
             title,
             column,
@@ -165,62 +300,85 @@ fn dispatch(cli: Cli) -> Result<ExitCode, Fail> {
             position: Position { top, before, after },
         } => {
             let description = text_arg(description)?;
-            one(
-                dir,
-                Command::CardAdd {
-                    title,
-                    column,
-                    description,
-                    id,
-                    top,
-                    before,
-                    after,
-                },
-            )?;
+            one(Command::CardAdd {
+                title,
+                column,
+                description,
+                id,
+                top,
+                before,
+                after,
+            })?;
         }
         Cmd::Mv {
             id,
             column,
             position: Position { top, before, after },
-        } => one(
-            dir,
-            Command::CardMove {
-                id,
-                column,
-                top,
-                before,
-                after,
-            },
-        )?,
+        } => one(Command::CardMove {
+            id,
+            column,
+            top,
+            before,
+            after,
+        })?,
         Cmd::Edit {
             id,
             title,
             description,
             append,
+            if_unchanged,
         } => {
             let description = text_arg(description)?;
             let append = text_arg(append)?;
-            one(
-                dir,
-                Command::CardEdit {
-                    id,
-                    title,
-                    description,
-                    append,
-                },
-            )?;
+            one(Command::CardEdit {
+                id,
+                title,
+                description,
+                append,
+                if_unchanged,
+            })?;
         }
-        Cmd::Rm { id } => one(dir, Command::CardRemove { id })?,
-        Cmd::Col(col) => one(dir, column_command(col))?,
+        Cmd::Rm { id } => one(Command::CardRemove { id })?,
+        Cmd::Col(col) => one(column_command(col))?,
         Cmd::Init { title, columns } => {
-            let target = match dir {
-                Some(d) => d.to_path_buf(),
-                None => cwd()?,
-            };
-            apply(&target, &[Command::BoardInit { title, columns }], None)?;
+            let init = [Command::BoardInit { title, columns }];
+            match target {
+                Target::Local(dir) => {
+                    let dir = match dir {
+                        Some(d) => d.clone(),
+                        None => cwd()?,
+                    };
+                    apply(&dir, &init, None)?;
+                }
+                Target::Remote(remote) => apply_remote(remote, &init, None)?,
+            }
         }
-        Cmd::Run { file } => run_script(dir, &file)?,
-        Cmd::Check { dir: target } => return check(&discover(target.as_deref().or(dir))?),
+        Cmd::Run { file } => run_script(target, &file)?,
+        Cmd::Check { dir } => {
+            return match (target, dir) {
+                (Target::Local(flag), dir) => check(&discover(dir.as_deref().or(flag.as_deref()))?),
+                (Target::Remote(_), Some(_)) => Err(Fail::from(
+                    "in remote mode `check` takes no directory; it checks the board given with -b"
+                        .to_string(),
+                )),
+                (Target::Remote(remote), None) => {
+                    Ok(print_diagnostics(&remote.view()?.diagnostics))
+                }
+            };
+        }
+        Cmd::Boards { json } => boards(target.remote("boards")?, json)?,
+        Cmd::Log { count } => {
+            let entries = target.remote("log")?.log(count)?;
+            let mut text = String::new();
+            for entry in entries {
+                text.push_str(entry.get());
+                text.push('\n');
+            }
+            emit_json(&text);
+        }
+        Cmd::Serve { .. } | Cmd::Server { .. } => {
+            return Err(Fail::from("not a board command".to_string()));
+        }
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -262,15 +420,12 @@ fn json_line<T: serde::Serialize>(value: &T) -> Result<String, Fail> {
         .map_err(|e| format!("cannot encode JSON: {e}"))?)
 }
 
-fn ls(dir: &Path, filter: Option<&str>, json: bool) -> Result<(), Fail> {
-    let (board, diagnostics) = load(dir)?;
-    let mut board_view: BoardView = view::view(&board);
-    board_view.diagnostics = diagnostics;
+fn ls(board_view: &BoardView, filter: Option<&str>, json: bool) -> Result<(), Fail> {
     if json {
-        emit_json(&json_line(&board_view)?);
+        emit_json(&json_line(board_view)?);
         return Ok(());
     }
-    emit(&render_ls(&board_view, filter)?);
+    emit(&render_ls(board_view, filter)?);
     Ok(())
 }
 
@@ -326,15 +481,9 @@ fn render_ls(view: &BoardView, filter: Option<&str>) -> Result<String, Fail> {
     Ok(out)
 }
 
-fn show(dir: &Path, id: &str, json: bool) -> Result<(), Fail> {
-    let (board, _) = load(dir)?;
-    let card = view::card(&board, id).ok_or_else(|| {
-        Fail::from(format!(
-            "no card '{id}'; card ids are the file names in cards/ without .md"
-        ))
-    })?;
+fn show(card: &CardDetail, json: bool) -> Result<(), Fail> {
     if json {
-        emit_json(&json_line(&card)?);
+        emit_json(&json_line(card)?);
         return Ok(());
     }
     let mut out = format!(
@@ -352,22 +501,26 @@ fn show(dir: &Path, id: &str, json: bool) -> Result<(), Fail> {
     Ok(())
 }
 
-fn check(dir: &Path) -> Result<ExitCode, Fail> {
-    let (_, diagnostics) = fs::load(dir).map_err(|e| e.to_string())?;
+/// Prints every diagnostic; failure when one is an error.
+fn print_diagnostics(diagnostics: &[markban_core::diagnostic::Diagnostic]) -> ExitCode {
     let mut out = String::new();
-    for diagnostic in &diagnostics {
+    for diagnostic in diagnostics {
         out.push_str(&format!("{diagnostic}\n"));
     }
     emit(&out);
-    let failed = diagnostics.iter().any(|d| d.severity == Severity::Error);
-    Ok(if failed {
+    if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
-    })
+    }
 }
 
-fn run_script(dir: Option<&Path>, file: &str) -> Result<(), Fail> {
+fn check(dir: &Path) -> Result<ExitCode, Fail> {
+    let (_, diagnostics) = fs::load(dir).map_err(|e| e.to_string())?;
+    Ok(print_diagnostics(&diagnostics))
+}
+
+fn run_script(target: &Target, file: &str) -> Result<(), Fail> {
     let script = if file == "-" {
         read_stdin()?
     } else {
@@ -383,12 +536,85 @@ fn run_script(dir: Option<&Path>, file: &str) -> Result<(), Fail> {
         commands.push(command);
         line_of.push(number);
     }
-    // A script may start with board.init in a directory that has no board yet.
-    let target = match discover(dir) {
-        Ok(target) => target,
-        Err(_) => cwd()?,
-    };
-    apply(&target, &commands, Some(&line_of))
+    match target {
+        Target::Local(dir) => {
+            // A script may start with board.init in a directory that has no board yet.
+            let dir = match discover(dir.as_deref()) {
+                Ok(dir) => dir,
+                Err(_) => cwd()?,
+            };
+            apply(&dir, &commands, Some(&line_of))
+        }
+        Target::Remote(remote) => apply_remote(remote, &commands, Some(&line_of)),
+    }
+}
+
+fn boards(remote: &Remote, json: bool) -> Result<(), Fail> {
+    let boards = remote.boards()?;
+    if json {
+        emit_json(&json_line(&boards)?);
+        return Ok(());
+    }
+    emit(&board_lines(boards.into_iter().map(|b| (b.id, b.title))));
+    Ok(())
+}
+
+fn board_lines(boards: impl IntoIterator<Item = (String, String)>) -> String {
+    boards
+        .into_iter()
+        .map(|(id, title)| format!("{id}  {title}\n"))
+        .collect()
+}
+
+/// `--data`, else `MARKBAN_DATA`, else the current directory.
+fn data_dir(flag: Option<PathBuf>) -> Result<PathBuf, Fail> {
+    match flag.or_else(|| env_var("MARKBAN_DATA").map(PathBuf::from)) {
+        Some(dir) => Ok(dir),
+        None => cwd(),
+    }
+}
+
+/// Prints a new token on stdout (the only place it ever appears) and a reminder on stderr.
+fn print_token(user: &str, token: &str) {
+    emit(&format!("{token}\n"));
+    let _ = writeln!(
+        std::io::stderr(),
+        "token for user '{user}', shown only once: store it now (e.g. as MARKBAN_TOKEN)"
+    );
+}
+
+/// The admin commands: direct file access to a data directory, never HTTP.
+fn server_admin(data: Option<PathBuf>, command: ServerCmd) -> Result<(), Fail> {
+    match command {
+        ServerCmd::Init { dir, admin } => {
+            let token = access::init(&dir, &admin)?;
+            print_token(&admin, &token);
+        }
+        ServerCmd::User(UserCmd::Add {
+            name,
+            boards,
+            admin,
+        }) => {
+            let token = access::add_user(&data_dir(data)?, &name, &boards, admin)?;
+            print_token(&name, &token);
+        }
+        ServerCmd::User(UserCmd::Remove { name }) => {
+            access::remove_user(&data_dir(data)?, &name)?;
+            emit(&format!("{name}\n"));
+        }
+        ServerCmd::User(UserCmd::Boards { name, boards }) => {
+            access::set_boards(&data_dir(data)?, &name, &boards)?;
+            emit(&format!("{name}\n"));
+        }
+        ServerCmd::Board(BoardCmd::Add { id, title, columns }) => {
+            let id = access::add_board(&data_dir(data)?, &id, &title, &columns)?;
+            emit(&format!("{id}\n"));
+        }
+        ServerCmd::Board(BoardCmd::List) => {
+            emit(&board_lines(access::list_boards(&data_dir(data)?)?));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
