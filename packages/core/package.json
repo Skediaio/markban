@@ -1,0 +1,35 @@
+{
+  "name": "@markban/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The markban engine (parse, view, check) as WebAssembly, plus a Node loader for board directories.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Skediaio/markban",
+    "directory": "packages/core"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": {
+      "node": "./src/index.node.js",
+      "default": "./src/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "wasm"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vite": "8.3.6",
+    "vitest": "5.1.0"
+  }
+}

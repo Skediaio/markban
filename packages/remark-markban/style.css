@@ -1,0 +1,142 @@
+/* Default look of remark-markban boards, mirroring the markban viewer.
+   Light and dark follow prefers-color-scheme. Override the custom properties on
+   .markban-board (or any ancestor) to retheme. */
+
+.markban-board {
+  --markban-bg: #f1f3f6;
+  --markban-surface: #ffffff;
+  --markban-column: #e4e7ec;
+  --markban-text: #1c2330;
+  --markban-muted: #5d6879;
+  --markban-border: #cfd5df;
+  --markban-accent: #2563eb;
+  --markban-warn-bg: #fff4d6;
+  --markban-warn-text: #5c4300;
+  --markban-error-bg: #fde4e4;
+  --markban-error-text: #7a1c1c;
+  --markban-shadow: 0 1px 2px rgba(15, 23, 42, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .markban-board {
+    --markban-bg: #11151c;
+    --markban-surface: #1e2530;
+    --markban-column: #181e27;
+    --markban-text: #e6eaf0;
+    --markban-muted: #9aa5b6;
+    --markban-border: #2e3745;
+    --markban-accent: #6ea0ff;
+    --markban-warn-bg: #3a2f10;
+    --markban-warn-text: #f3d98b;
+    --markban-error-bg: #3d1a1a;
+    --markban-error-text: #f5b3b3;
+    --markban-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  }
+}
+
+.markban-board,
+.markban-board * {
+  box-sizing: border-box;
+}
+
+.markban-board {
+  margin: 1.5rem 0;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--markban-bg);
+  color: var(--markban-text);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.markban-title { margin: 0 0 4px; font-size: 1.5rem; }
+.markban-description { margin: 0 0 16px; color: var(--markban-muted); }
+.markban-description > :first-child { margin-top: 0; }
+.markban-description > :last-child { margin-bottom: 0; }
+
+.markban-notice {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin: 0 0 16px;
+  background: var(--markban-warn-bg);
+  color: var(--markban-warn-text);
+}
+.markban-notice-error { background: var(--markban-error-bg); color: var(--markban-error-text); }
+.markban-notice-title { margin: 0; font-weight: 600; }
+.markban-notice ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.markban-columns {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-bottom: 12px;
+}
+
+.markban-column {
+  flex: 0 0 280px;
+  background: var(--markban-column);
+  border-radius: 10px;
+  padding: 10px;
+  scroll-snap-align: start;
+}
+.markban-unsorted { opacity: 0.85; border: 1px dashed var(--markban-border); }
+
+.markban-column-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0 0 10px;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--markban-muted);
+}
+.markban-count {
+  background: var(--markban-surface);
+  border-radius: 999px;
+  padding: 0 8px;
+  font-size: 0.8rem;
+}
+.markban-empty { margin: 0; color: var(--markban-muted); font-size: 0.9rem; }
+
+.markban-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+
+.markban-card {
+  background: var(--markban-surface);
+  border: 1px solid var(--markban-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: var(--markban-shadow);
+  overflow-wrap: anywhere;
+}
+.markban-card:hover,
+.markban-card:focus-within { border-color: var(--markban-accent); }
+
+.markban-card-details > summary { cursor: pointer; }
+.markban-card-details > summary:focus-visible {
+  outline: 2px solid var(--markban-accent);
+  outline-offset: 2px;
+}
+.markban-card-body { margin-top: 8px; }
+.markban-card-body > :first-child { margin-top: 0; }
+.markban-card-body > :last-child { margin-bottom: 0; }
+.markban-card-body a { color: var(--markban-accent); }
+.markban-card-body pre {
+  overflow-x: auto;
+  background: var(--markban-column);
+  padding: 10px;
+  border-radius: 6px;
+}
+.markban-card-body code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+.markban-card-body table { border-collapse: collapse; }
+.markban-card-body th,
+.markban-card-body td { border: 1px solid var(--markban-border); padding: 2px 8px; }
+.markban-heading { margin: 0.5em 0; }
+.markban-unsafe,
+.markban-image { color: var(--markban-muted); }

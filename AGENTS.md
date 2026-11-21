@@ -54,7 +54,14 @@ Follow "Rules for writers" in `spec/SPEC.md`. Never rename a card id. Preserve u
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p <crate you touched>
+npm test   # only when you touched packages/ (after `npm ci && npm run build`)
 ```
 
-`cargo xtask ci` runs the full gate (fmt, clippy, tests, `markban check` on every example) once per finished
+`cargo xtask ci` runs the full gate (fmt, clippy, tests, a release build of `markban-wasm` for
+`wasm32-unknown-unknown`, `markban check` on every example) once per finished
 piece of work, before `main` moves. Then update `docs/roadmap.md` (done with its date, what is still open).
+
+The JavaScript packages live in `packages/` (npm workspaces). `npm run build` compiles `markban-wasm` and runs
+`wasm-bindgen` into `packages/core`; this needs the `wasm32-unknown-unknown` target, a `wasm-bindgen` CLI of
+exactly the version in `Cargo.lock`, and Node 20 or newer. `npm test` runs the vitest suites. JS is plain
+JavaScript with JSDoc types, ESM only, never TypeScript source.

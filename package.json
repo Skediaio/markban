@@ -1,0 +1,17 @@
+{
+  "name": "markban-js",
+  "private": true,
+  "type": "module",
+  "description": "npm workspace of the markban JavaScript packages.",
+  "license": "MIT",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "cargo build -p markban-wasm --target wasm32-unknown-unknown --release && wasm-bindgen --target web --no-typescript --out-dir packages/core/wasm --out-name markban_wasm target/wasm32-unknown-unknown/release/markban_wasm.wasm",
+    "test": "npm run test --workspaces --if-present"
+  }
+}

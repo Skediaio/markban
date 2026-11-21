@@ -1,0 +1,21 @@
+[package]
+name = "markban-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WebAssembly bindings for markban-core: parse, view and check a board held in memory."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+markban-core = { path = "../markban-core" }
+serde.workspace = true
+serde_json = "1"
+
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2.130"
+
+[lints]
+workspace = true

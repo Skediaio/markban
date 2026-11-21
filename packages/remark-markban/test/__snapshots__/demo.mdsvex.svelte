@@ -1,0 +1,24 @@
+
+<section class="markban-board" aria-label="Board: Markban roadmap">
+<header class="markban-header">
+<h2 class="markban-title">Markban roadmap</h2>
+<div class="markban-description"><p>The roadmap of markban itself, kept as a markban board.</p></div>
+</header>
+<div class="markban-columns">
+<section class="markban-column" data-column="backlog" aria-label="Backlog">
+<h3 class="markban-column-title"><span class="markban-column-name">Backlog</span> <span class="markban-count" aria-label="0 cards">0</span></h3>
+<p class="markban-empty">No cards</p>
+</section>
+<section class="markban-column" data-column="doing" aria-label="Doing">
+<h3 class="markban-column-title"><span class="markban-column-name">Doing</span> <span class="markban-count" aria-label="0 cards">0</span></h3>
+<p class="markban-empty">No cards</p>
+</section>
+<section class="markban-column" data-column="done" aria-label="Done">
+<h3 class="markban-column-title"><span class="markban-column-name">Done</span> <span class="markban-count" aria-label="3 cards">3</span></h3>
+<ul class="markban-cards"><li class="markban-card" data-card="0001-spec-draft"><details class="markban-card-details"><summary class="markban-card-title">Write spec v0.1</summary><div class="markban-card-body"><p>The format in <code>spec/SPEC.md</code>, chosen after the experiments in <code>research/format-experiments</code>.</p></div></details></li>
+<li class="markban-card" data-card="0002-parser"><details class="markban-card-details"><summary class="markban-card-title">Core library and CLI</summary><div class="markban-card-body"><p>Lossless parser and writer, <code>check</code>, commands, and the <code>markban</code> command line.</p></div></details></li>
+<li class="markban-card" data-card="0003-board-ui"><details class="markban-card-details"><summary class="markban-card-title">Read-only board viewer</summary><div class="markban-card-body"><p>Dioxus fullstack page that shows the board and refreshes live when agents change it.</p></div></details></li></ul>
+</section>
+</div>
+</section>
+

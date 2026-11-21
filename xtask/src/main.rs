@@ -57,6 +57,17 @@ fn ci() -> Result<(), String> {
         ],
     )?;
     run(&root, &["test", "--workspace"])?;
+    run(
+        &root,
+        &[
+            "build",
+            "-p",
+            "markban-wasm",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--release",
+        ],
+    )?;
     check_examples(&root)
 }
 
