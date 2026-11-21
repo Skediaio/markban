@@ -4,6 +4,17 @@ Decisions taken, newest first, each with its reason. Open decisions at the botto
 
 ## Taken
 
+### 2026-11-21: A markban server for live, shared boards without git
+
+Agents struggle with abstractions such as git workflows and external trackers. `markban serve` hosts several
+boards; agents and people use the same CLI commands against it by setting `MARKBAN_URL` and `MARKBAN_TOKEN`,
+and the browser UI sends the same commands. The board's Markdown files stay the database, on the server.
+Conflicts reduce to clear errors because the server runs commands one at a time with the existing lock and
+compare-and-swap, and commands carry intent ("move card X to Done") rather than diffs. Each user or agent has
+a token that lists the boards it may see. An append-only log per board records who ran which command. Local
+mode (a board directory in a repository, edited with git) stays fully supported. This revises "the viewer is
+read-only": the viewer gains editing, through commands only.
+
 ### 2026-11-21: Format B, per-card frontmatter carries column and order
 
 Measured in `research/format-experiments` against an index in `board.md` (A) and a single file (C). With
