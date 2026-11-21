@@ -18,7 +18,12 @@ A board is a directory:
   board.md          # board title, columns, optional description
   cards/
     <id>.md         # one file per card: title, column, order, description
+  .markban.lock     # optional, tool-owned: advisory lock file, never part of the board
 ```
+
+`.markban.lock` is created by tools that write the board, to take turns (see § 5). It is empty, may be left
+in place, should be git-ignored, and tools never report it. Symbolic links are never followed: a link in
+`cards/` is ignored (W001) and a `board.md` that is a link counts as missing.
 
 Each card carries its own column and position, so moving, adding, editing or removing a card changes exactly
 one file. No change to a card touches `board.md`.
@@ -112,6 +117,11 @@ These rules hold for agents editing by hand and for tools.
 - **Remove a column**: only when no card refers to it; move or remove its cards first.
 - Preserve unknown keys, lines and content. Keep line endings as they are.
 - Never write a file partially: write a temporary file next to it and rename it into place.
+- Tools that write take an exclusive advisory lock on `.markban.lock` in the board directory for the whole
+  read, change and write cycle, so two tools never interleave. By hand, there is nothing to lock: just
+  follow the rules above.
+- Write in an order that keeps the board valid at every step: when a change adds columns, write `board.md`
+  first; when it removes columns, write it last, after the cards moved away.
 
 ## 6. Validity
 
@@ -133,7 +143,7 @@ Warnings do not make a board invalid:
 
 | Code | Meaning |
 |---|---|
-| `W001` | A file or directory in `cards/` that is not `<id>.md`. |
+| `W001` | A file or directory in `cards/` that is not `<id>.md`, or a symbolic link (`symbolic link ignored`). `.markban.lock` is not reported. |
 | `W002` | Two cards in one column with the same `order` (ties sort by id). |
 
 A viewer shows cards with an unknown column in an extra "Unsorted" column and still renders the rest.

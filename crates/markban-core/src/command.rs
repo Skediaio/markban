@@ -380,6 +380,7 @@ impl Board {
             board: file,
             cards: std::collections::BTreeMap::new(),
             ignored: Vec::new(),
+            taken: BTreeSet::new(),
         })
     }
 }
@@ -604,13 +605,11 @@ fn card_add(
                 flat(id)
             )));
         }
-        Some(id) if board.cards.contains_key(id) => {
+        Some(id) if board.id_taken(id) => {
             return Err(CommandError::CardExists(id.to_string()));
         }
         Some(id) => id.to_string(),
-        None => unique_id(&slug(title), Some(MAX_ID_LEN), |c| {
-            board.cards.contains_key(c)
-        })?,
+        None => unique_id(&slug(title), Some(MAX_ID_LEN), |c| board.id_taken(c))?,
     };
     let order = allocate(board, &column, &id, &pos.unwrap_or(Position::End))?;
     let mut card = CardFile::parse(&id, "---\n---\n");
