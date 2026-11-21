@@ -1,8 +1,9 @@
-// Drag the board sideways with the mouse, like Trello, with a short glide after release.
+// Drag the board sideways with the mouse, like Trello. On release the board eases to the
+// nearest column edge, taking the throw into account.
 // Touch keeps native scrolling. A drag that moved does not open the card it started on.
 (() => {
   const THRESHOLD = 5;
-  const FRICTION = 0.92; // velocity kept per 16 ms frame
+  const THROW = 200; // ms of momentum projected ahead on release
   let drag = null;
   let glide = 0;
 
@@ -38,8 +39,8 @@
   const end = (e) => {
     if (!drag) return;
     const { columns, moved } = drag;
-    // A pause before release means no glide.
-    let v = e.timeStamp - drag.lastT > 80 ? 0 : drag.v;
+    // A pause before release means no throw.
+    const v = e.timeStamp - drag.lastT > 80 ? 0 : drag.v;
     drag = null;
     if (!moved) return;
     columns.classList.remove("dragging");
@@ -49,15 +50,28 @@
     };
     window.addEventListener("click", swallow, { capture: true, once: true });
     setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
-    let last = performance.now();
+    // Ease to the column edge nearest to where the throw would have ended.
+    const from = columns.scrollLeft;
+    const projected = from + v * THROW;
+    const base = columns.getBoundingClientRect().left - from;
+    let to = from;
+    let best = Infinity;
+    for (const col of columns.querySelectorAll(".column")) {
+      const edge = col.getBoundingClientRect().left - base;
+      if (Math.abs(edge - projected) < best) {
+        best = Math.abs(edge - projected);
+        to = edge;
+      }
+    }
+    to = Math.max(0, Math.min(to, columns.scrollWidth - columns.clientWidth));
+    const duration = Math.min(450, 200 + Math.abs(to - from) * 0.5);
+    const start = performance.now();
     const step = (now) => {
-      const dt = now - last;
-      last = now;
-      columns.scrollLeft += v * dt;
-      v *= Math.pow(FRICTION, dt / 16);
-      glide = Math.abs(v) > 0.02 ? requestAnimationFrame(step) : 0;
+      const t = Math.min(1, (now - start) / duration);
+      columns.scrollLeft = from + (to - from) * (1 - Math.pow(1 - t, 3));
+      glide = t < 1 ? requestAnimationFrame(step) : 0;
     };
-    if (Math.abs(v) > 0.05) glide = requestAnimationFrame(step);
+    glide = requestAnimationFrame(step);
   };
   document.addEventListener("pointerup", end);
   document.addEventListener("pointercancel", end);
