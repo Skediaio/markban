@@ -42,7 +42,9 @@ fn missing_or_wrong_token_is_401_everywhere() {
     let f = Fixture::new();
     let mut all = endpoints("kuuno");
     all.push(("GET", "/api/boards".into(), None));
-    let near = format!("{}0", &f.admin[..f.admin.len() - 1]);
+    // Same token with its last character changed; pick a character that differs from the real one.
+    let last = if f.admin.ends_with('0') { '1' } else { '0' };
+    let near = format!("{}{last}", &f.admin[..f.admin.len() - 1]);
     for (method, path, body) in all {
         for token in [None, Some("wrong"), Some(""), Some(near.as_str())] {
             let r = send(&f, method, &path, token, body);

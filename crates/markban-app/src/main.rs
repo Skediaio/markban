@@ -4,9 +4,13 @@
 
 mod api;
 #[cfg(feature = "server")]
+mod auth;
+#[cfg(feature = "server")]
+mod git;
+#[cfg(feature = "server")]
 mod server;
 
-use api::{get_card, wait_for_change};
+use api::{auth_enabled, get_card, wait_for_change};
 use dioxus::prelude::*;
 use markban_core::view::{BoardView, CardSummary};
 
@@ -17,15 +21,30 @@ fn main() {
     dioxus::launch(App);
 }
 
-/// The server serves the app through a custom router so every request passes the `Host` check.
+/// The server serves the app through a custom router so every request passes the `Host` check
+/// and, with `MARKBAN_PASSWORD` set, the password guard. `--healthcheck` probes a running server.
 #[cfg(feature = "server")]
 fn main() {
-    dioxus::serve(|| async {
-        Ok(
-            dioxus::server::router(App).layer(dioxus::server::axum::middleware::from_fn(
-                server::host_guard,
-            )),
-        )
+    use dioxus::server::axum::middleware::{from_fn, from_fn_with_state};
+    use dioxus::server::axum::routing::get;
+
+    if std::env::args().any(|a| a == "--healthcheck") {
+        std::process::exit(i32::from(!server::healthcheck()));
+    }
+    if let Err(e) = server::start_git() {
+        eprintln!("markban: {e}");
+        std::process::exit(2);
+    }
+    let auth = auth::Auth::from_env();
+    dioxus::serve(move || {
+        let auth = auth.clone();
+        async move {
+            let mut router = dioxus::server::router(App).route("/healthz", get(|| async { "ok" }));
+            if let Some(auth) = auth {
+                router = router.layer(from_fn_with_state(auth, auth::guard));
+            }
+            Ok(router.layer(from_fn(server::host_guard)))
+        }
     });
 }
 
@@ -44,6 +63,7 @@ fn App() -> Element {
     let mut rev = use_signal(|| 0_u64);
     let mut error = use_signal(|| None::<String>);
     let selected = use_signal(|| None::<String>);
+    let login = use_resource(auth_enabled);
 
     // Long poll: each call returns when the server's revision changes (or after ~25 s).
     use_future(move || async move {
@@ -66,6 +86,9 @@ fn App() -> Element {
         document::Stylesheet { href: STYLE }
         document::Title { "Markban" }
         main { class: "app",
+            if let Some(Ok(true)) = *login.read() {
+                a { class: "logout", href: "/logout", "Log out" }
+            }
             if let Some(message) = error() {
                 p { class: "banner error", "Cannot reach the server: {message}" }
             }

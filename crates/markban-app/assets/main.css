@@ -41,6 +41,7 @@ body {
 }
 
 .app { padding: 16px; max-width: 100%; }
+.logout { float: right; font-size: 0.9rem; }
 
 .board-head h1 { margin: 0 0 4px; font-size: 1.5rem; }
 .description { margin: 0 0 16px; color: var(--muted); white-space: pre-wrap; }

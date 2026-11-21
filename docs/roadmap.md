@@ -24,6 +24,7 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 | 10 | `@markban/svelte`, Vite plugin, SvelteKit + mdsvex example | Done 2026-11-21 (live reload of the dev server not yet checked in a real browser) |
 | 11 | Agent skill for local and server mode | Open |
 | 12 | `undo`, format v0.2 (assignee, labels, extra keys shown as chips) | Open |
+| 13 | Viewer hosting: one shared password, board from a git repository, Dockerfile | Done 2026-11-21 |
 
 ## Open
 
@@ -31,6 +32,8 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 
 - Viewer: render task-list items as checkboxes; show the column name instead of its id in the card detail.
 - Independent review of iteration 1.
+- Viewer hosting: sessions live in memory (a restart logs everyone out); without `MARKBAN_TRUST_PROXY=1`
+  all clients share one failed-login counter, because the Dioxus server does not expose the peer address.
 - Server: token rotation (`server user token <name>`); HTTP admin endpoints for the `admin` flag (milestone 9);
   rate limits and per-client connection limits (left to the reverse proxy); a container image and deployment
   guide (deferred until the server is deployed).

@@ -34,3 +34,9 @@ pub async fn wait_for_change(since: u64) -> Result<(u64, BoardView), ServerFnErr
     let state = crate::server::state().map_err(ServerFnError::new)?;
     Ok(state.wait_for_change(since).await)
 }
+
+/// Whether the viewer sits behind a password, so the page offers a logout link.
+#[server]
+pub async fn auth_enabled() -> Result<bool, ServerFnError> {
+    Ok(std::env::var_os("MARKBAN_PASSWORD").is_some_and(|p| !p.is_empty()))
+}
