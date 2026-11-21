@@ -19,3 +19,17 @@ pub use check::check;
 pub use command::{Command, CommandError, Outcome, execute, execute_batch};
 pub use id::{is_valid_id, slug};
 pub use view::view;
+
+/// Lower-case hex SHA-256 of `bytes`: the card hash in `show --json` and `card.edit`'s
+/// `if_unchanged`.
+#[must_use]
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    use std::fmt::Write;
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{b:02x}");
+            out
+        })
+}

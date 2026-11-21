@@ -11,6 +11,17 @@ pub struct Cli {
     /// directory that contains board.md).
     #[arg(short = 'C', global = true, value_name = "DIR")]
     pub dir: Option<PathBuf>,
+    /// Remote mode: the markban server's URL (default: $MARKBAN_URL).
+    #[arg(long, global = true, value_name = "URL")]
+    pub url: Option<String>,
+    /// Remote mode: the access token (default: $MARKBAN_TOKEN; prefer the variable, a flag
+    /// shows up in the process list).
+    #[arg(long, global = true, value_name = "TOKEN")]
+    pub token: Option<String>,
+    /// Remote mode: the board id on the server (default: $MARKBAN_BOARD, which is a board id in
+    /// remote mode and a directory locally).
+    #[arg(short = 'b', long, global = true, value_name = "ID")]
+    pub board: Option<String>,
     #[command(subcommand)]
     pub command: Cmd,
 }
@@ -80,6 +91,9 @@ pub enum Cmd {
         /// Append a line to the description, or `-` to read it from stdin.
         #[arg(long, value_name = "TEXT", conflicts_with = "description")]
         append: Option<String>,
+        /// Refuse (exit 3) unless the card still has this sha256, as `show --json` printed it.
+        #[arg(long, value_name = "SHA256")]
+        if_unchanged: Option<String>,
     },
     /// Remove a card.
     Rm { id: String },
@@ -102,6 +116,87 @@ pub enum Cmd {
         /// Board directory (default: discovered like the other commands).
         dir: Option<PathBuf>,
     },
+    /// List the boards on the server that the token may use (remote mode only).
+    Boards {
+        /// Print the list as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print the last commands run on the board, one JSON line each (remote mode only).
+    Log {
+        /// How many entries.
+        #[arg(short = 'n', default_value_t = 50, value_name = "N")]
+        count: usize,
+    },
+    /// Serve the boards of a data directory over HTTP (see `markban server init`).
+    Serve {
+        /// Data directory (default: $MARKBAN_DATA, else the current directory).
+        #[arg(long, value_name = "DIR")]
+        data: Option<PathBuf>,
+        /// Address to listen on; keep it on loopback behind a reverse proxy.
+        #[arg(long, value_name = "ADDR", default_value = markban_server::DEFAULT_LISTEN)]
+        listen: String,
+    },
+    /// Administer a server's data directory directly on disk (never over HTTP).
+    Server {
+        /// Data directory (default: $MARKBAN_DATA, else the current directory).
+        #[arg(long, value_name = "DIR")]
+        data: Option<PathBuf>,
+        #[command(subcommand)]
+        command: ServerCmd,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ServerCmd {
+    /// Create a data directory with a first admin user; prints its token once.
+    Init {
+        dir: PathBuf,
+        /// Name of the first user.
+        #[arg(long, value_name = "NAME", default_value = "admin")]
+        admin: String,
+    },
+    /// Add or remove users, or change their boards.
+    #[command(subcommand)]
+    User(UserCmd),
+    /// Add or list boards.
+    #[command(subcommand)]
+    Board(BoardCmd),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum UserCmd {
+    /// Add a user; prints its token once.
+    Add {
+        name: String,
+        /// Board ids the user may use, comma separated, or * for all.
+        #[arg(long, required = true, value_delimiter = ',', value_name = "IDS")]
+        boards: Vec<String>,
+        /// Mark the user as an administrator.
+        #[arg(long)]
+        admin: bool,
+    },
+    /// Remove a user; its token stops working at once.
+    Remove { name: String },
+    /// Replace the boards a user may use (comma separated, or * for all).
+    Boards {
+        name: String,
+        #[arg(required = true, value_delimiter = ',', value_name = "IDS")]
+        boards: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BoardCmd {
+    /// Create a board.
+    Add {
+        id: String,
+        title: String,
+        #[arg(required = true, value_name = "COL")]
+        columns: Vec<String>,
+    },
+    /// List all boards.
+    List,
 }
 
 #[derive(Debug, Subcommand)]

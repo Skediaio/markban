@@ -222,6 +222,33 @@ pub enum RunError {
     },
 }
 
+/// Exit code (spec section 8): invalid input or the command was refused; fix the input.
+pub const EXIT_INVALID: u8 = 1;
+/// Exit code: contention (another writer, the board lock, a stale `if_unchanged`); safe to retry.
+pub const EXIT_CONTENDED: u8 = 3;
+/// Exit code: some files were written before a failure; inspect, do not retry blindly.
+pub const EXIT_PARTIAL: u8 = 4;
+
+impl RunError {
+    /// The exit code for this failure (spec section 8): contention, the board lock, conflicts and
+    /// a stale `if_unchanged` are retryable (3), a partial write needs inspection (4), everything
+    /// else needs a different input (1).
+    #[must_use]
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::Contended { .. }
+            | Self::Locked { .. }
+            | Self::Apply(ApplyError::Conflict { .. })
+            | Self::Command {
+                source: CommandError::CardChanged { .. },
+                ..
+            } => EXIT_CONTENDED,
+            Self::PartiallyApplied { .. } => EXIT_PARTIAL,
+            _ => EXIT_INVALID,
+        }
+    }
+}
+
 /// Attempts `run` makes before giving up on concurrent writers.
 const MAX_ATTEMPTS: usize = 3;
 

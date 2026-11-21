@@ -12,7 +12,10 @@ struct Out {
 
 fn bin() -> Command {
     let mut cmd = Command::cargo_bin("markban").unwrap();
-    cmd.env_remove("MARKBAN_BOARD");
+    cmd.env_remove("MARKBAN_BOARD")
+        .env_remove("MARKBAN_URL")
+        .env_remove("MARKBAN_TOKEN")
+        .env_remove("MARKBAN_DATA");
     cmd
 }
 

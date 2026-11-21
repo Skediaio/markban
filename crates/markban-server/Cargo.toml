@@ -1,0 +1,25 @@
+[package]
+name = "markban-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The markban server: several boards, tokens with board access, a command API and a log."
+
+[dependencies]
+markban-core = { path = "../markban-core" }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "query"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+serde.workspace = true
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+getrandom = "0.3"
+toml_edit = "0.25"
+time = { version = "0.3", features = ["formatting"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

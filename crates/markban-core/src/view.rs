@@ -32,13 +32,15 @@ pub struct BoardView {
 }
 
 /// One card in full: what `markban show` prints.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardDetail {
     pub id: String,
     pub title: String,
     pub column: Option<String>,
     /// The text after the frontmatter, without the leading blank line and trailing newlines.
     pub description: String,
+    /// Lower-case hex SHA-256 of the card file; pass it as `card.edit`'s `if_unchanged`.
+    pub sha256: String,
 }
 
 /// The card `id` in full, `None` when the board has no such card.
@@ -55,6 +57,7 @@ pub fn card(board: &Board, id: &str) -> Option<CardDetail> {
         title: text(card, "title").unwrap_or_else(|| id.to_string()),
         column: text(card, "column"),
         description: body.trim_end_matches(['\n', '\r']).to_string(),
+        sha256: crate::sha256_hex(&card.to_bytes()),
     })
 }
 
