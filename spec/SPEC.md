@@ -33,6 +33,7 @@ strict subset of YAML:
   `\"` and `\\`). Writers quote a value when it is empty, starts or ends with a space, starts with one of
   `` "'[]{}&*!|>%@`#,?:- ``, or contains `: ` or ` #`.
 - `board.md` has one block key, `columns:`, followed by list items (see § 3).
+- An empty value counts as missing. If a key appears twice, the first one counts.
 - Any other line inside the block, and any key markban does not know, is preserved byte for byte.
 
 ## 3. `board.md`
@@ -67,7 +68,8 @@ keys are preserved. Everything after the closing `---` is the board description.
 ## 4. Card files (`cards/<id>.md`)
 
 The filename without `.md` is the card id: `[a-z0-9]+(-[a-z0-9]+)*`, at most 64 characters. The id is the slug
-of the title at creation (lowercase, every run of other characters becomes `-`, trimmed of `-`); on collision
+of the title at creation (lowercase ASCII letters and digits kept, every run of other characters becomes `-`,
+trimmed of `-`, `card` if nothing is left); on collision
 append `-2`, `-3`, …. The id never changes, even when the title does.
 
 ```markdown
@@ -84,7 +86,7 @@ Sessions expire after 5 minutes instead of 30.
 |---|---|---|
 | `title` | yes | One line. |
 | `column` | yes | A `columns[].id` of `board.md`. |
-| `order` | no | Decimal number (`-12`, `1500`, `1500.25`). Sort key within the column, ascending. |
+| `order` | no | Decimal number matching `-?[0-9]+(\.[0-9]+)?` (`-12`, `1500`, `1500.25`). Sort key within the column, ascending. |
 
 Everything after the closing `---` is the description, free Markdown. Unknown keys are preserved.
 
@@ -117,7 +119,7 @@ These rules hold for agents editing by hand and for tools.
 | `E001` | `board.md` missing, or its frontmatter is missing or unterminated. |
 | `E002` | `markban` missing, or a version this tool does not support. |
 | `E003` | `title` missing (board or card). |
-| `E004` | Column id missing, malformed or duplicated; column name missing. |
+| `E004` | `columns` block missing; column id missing, malformed or duplicated; column name missing. |
 | `E005` | Card file name is not a valid id. |
 | `E006` | Card frontmatter missing or unterminated. |
 | `E007` | Card `column` missing, or not a column of `board.md`. |
