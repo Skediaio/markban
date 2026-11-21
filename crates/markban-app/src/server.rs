@@ -42,8 +42,10 @@ fn is_relative_url(url: &str) -> bool {
 #[must_use]
 pub fn render_markdown(markdown: &str) -> String {
     let mut html = String::new();
-    let parser =
-        pulldown_cmark::Parser::new_ext(markdown, pulldown_cmark::Options::ENABLE_TASKLISTS);
+    let options = pulldown_cmark::Options::ENABLE_TASKLISTS
+        | pulldown_cmark::Options::ENABLE_TABLES
+        | pulldown_cmark::Options::ENABLE_STRIKETHROUGH;
+    let parser = pulldown_cmark::Parser::new_ext(markdown, options);
     pulldown_cmark::html::push_html(&mut html, HighlightFences::new(parser));
     let mut sanitizer = ammonia::Builder::default();
     sanitizer
@@ -786,5 +788,14 @@ mod tests {
         let html = render_markdown("```\"><img src=x>\nfoo\n```\n");
         assert!(!html.contains("<img"), "{html}");
         assert!(!html.contains("onerror"), "{html}");
+    }
+
+    #[test]
+    fn renders_tables_and_strikethrough() {
+        let html = render_markdown("| Lane | What |\n|---|---|\n| **Dev** | ~~old~~ new |\n");
+        assert!(html.contains("<table>"), "{html}");
+        assert!(html.contains("<th>Lane</th>"), "{html}");
+        assert!(html.contains("<td><strong>Dev</strong></td>"), "{html}");
+        assert!(html.contains("<del>old</del>"), "{html}");
     }
 }
