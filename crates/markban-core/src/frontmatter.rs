@@ -90,11 +90,13 @@ pub(crate) fn parse_value(raw: &str) -> Result<String, ValueError> {
 
 /// Formats a value, quoting it when the spec rule says so.
 pub(crate) fn format_value(value: &str) -> String {
-    const SPECIAL: &str = "\"'[]{}&*!|>%@`#,?:-";
+    const SPECIAL: &str = "\"'[]{}&*!|>%@`#,?:";
     let needs_quote = value.is_empty()
         || value.starts_with([' ', '\t'])
         || value.ends_with([' ', '\t'])
         || value.starts_with(|c| SPECIAL.contains(c))
+        // A leading '-' needs quotes, except in a decimal number such as `-72`.
+        || (value.starts_with('-') && crate::order::Decimal::parse(value).is_none())
         || value.contains(": ")
         || value.contains(" #");
     if needs_quote {

@@ -31,7 +31,7 @@ strict subset of YAML:
 - A key line is `key: value`. Keys match `[a-z][a-z0-9_]*`.
 - A value is either **plain** (the rest of the line, trimmed) or **double-quoted** (`"..."` with the escapes
   `\"` and `\\`). Writers quote a value when it is empty, starts or ends with a space, starts with one of
-  `` "'[]{}&*!|>%@`#,?:- ``, or contains `: ` or ` #`.
+  `` "'[]{}&*!|>%@`#,?: ``, starts with `-` and is not a decimal number, or contains `: ` or ` #`.
 - `board.md` has one block key, `columns:`, followed by list items (see § 3).
 - An empty value counts as missing. If a key appears twice, the first one counts.
 - Any other line inside the block, and any key markban does not know, is preserved byte for byte.

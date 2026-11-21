@@ -107,6 +107,10 @@ fn set_quoting_rule() {
         ("#x", "k: \"#x\""),
         ("@x", "k: \"@x\""),
         ("a-b", "k: a-b"),
+        ("-72", "k: -72"),
+        ("-1500.25", "k: -1500.25"),
+        ("-x", "k: \"-x\""),
+        ("-", "k: \"-\""),
     ];
     for (value, expected) in cases {
         let mut f = fm("---\nk: old\n---\n");

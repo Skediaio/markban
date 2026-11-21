@@ -110,3 +110,24 @@ fn slug_rules() {
     assert_eq!(slug(&format!("{} x", "a".repeat(63))), "a".repeat(63));
     assert!(markban_core::is_valid_id(&slug("Anything goes ?!")));
 }
+
+#[test]
+fn card_detail_has_title_column_and_description() {
+    let mut b = board_with(&[("c1", "title: C1\ncolumn: a")]);
+    b.cards.get_mut("c1").unwrap().body = "\nFirst line.\n\nSecond *line*.\n".to_string();
+    let detail = markban_core::view::card(&b, "c1").unwrap();
+    assert_eq!(detail.id, "c1");
+    assert_eq!(detail.title, "C1");
+    assert_eq!(detail.column.as_deref(), Some("a"));
+    assert_eq!(detail.description, "First line.\n\nSecond *line*.");
+}
+
+#[test]
+fn card_detail_tolerates_missing_keys_and_unknown_cards() {
+    let b = board_with(&[("c1", "order: 1")]);
+    let detail = markban_core::view::card(&b, "c1").unwrap();
+    assert_eq!(detail.title, "c1");
+    assert_eq!(detail.column, None);
+    assert_eq!(detail.description, "");
+    assert!(markban_core::view::card(&b, "nope").is_none());
+}

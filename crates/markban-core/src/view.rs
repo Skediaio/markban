@@ -31,6 +31,29 @@ pub struct BoardView {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+/// One card in full: what `markban show` prints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CardDetail {
+    pub id: String,
+    pub title: String,
+    pub column: Option<String>,
+    /// The text after the frontmatter, without the leading blank line and trailing newlines.
+    pub description: String,
+}
+
+/// The card `id` in full, `None` when the board has no such card.
+#[must_use]
+pub fn card(board: &Board, id: &str) -> Option<CardDetail> {
+    let card = board.cards.get(id)?;
+    let body = card.body.strip_prefix('\n').unwrap_or(&card.body);
+    Some(CardDetail {
+        id: id.to_string(),
+        title: text(card, "title").unwrap_or_else(|| id.to_string()),
+        column: text(card, "column"),
+        description: body.trim_end_matches(['\n', '\r']).to_string(),
+    })
+}
+
 struct Entry {
     order: Option<Decimal>,
     summary: CardSummary,

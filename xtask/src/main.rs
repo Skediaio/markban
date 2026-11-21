@@ -61,12 +61,6 @@ fn ci() -> Result<(), String> {
 }
 
 fn check_examples(root: &Path) -> Result<(), String> {
-    if !root.join("crates/markban-cli").is_dir() {
-        println!(
-            "note: crates/markban-cli does not exist yet; skipping `markban check` on examples/"
-        );
-        return Ok(());
-    }
     let entries = std::fs::read_dir(root.join("examples"))
         .map_err(|e| format!("cannot read examples/: {e}"))?;
     let mut dirs: Vec<PathBuf> = entries
