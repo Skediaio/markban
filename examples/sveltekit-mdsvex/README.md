@@ -1,6 +1,6 @@
 # SvelteKit + mdsvex example
 
-A minimal SvelteKit 2 app (Svelte 5, plain JavaScript with JSDoc, `adapter-static`, everything prerendered) that
+A minimal SvelteKit 3 app (Svelte 5, plain JavaScript with JSDoc, `adapter-static`, everything prerendered) that
 shows a markban board two ways. It uses the workspace packages of this repository.
 
 | Route | How | What it shows |
@@ -9,7 +9,7 @@ shows a markban board two ways. It uses the workspace packages of this repositor
 | `/svelte` | `src/routes/svelte/+page.svelte`, `import board from 'markban:demo-board'` | `<Markban {board} />`, cards open in an accessible dialog. |
 
 Both read `examples/demo-board`. Boards are looked up in `examples/` (the `root` option of both plugins, see
-`svelte.config.js`).
+`vite.config.js`; Kit 3 takes its configuration there).
 
 From the repository root:
 

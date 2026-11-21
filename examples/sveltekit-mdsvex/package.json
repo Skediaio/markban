@@ -14,13 +14,13 @@
     "remark-markban": "0.1.0"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "3.0.11",
-    "@sveltejs/kit": "2.70.4",
+    "@sveltejs/adapter-static": "4.0.1",
+    "@sveltejs/kit": "3.4.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "mdsvex": "0.12.8",
-    "svelte": "5.57.3",
-    "vite": "8.3.6",
+    "svelte": "5.59.1",
+    "vite": "8.3.8",
     "vitest": "5.1.0"
   },
-  "description": "SvelteKit 2 + Svelte 5 + mdsvex: a markban board in a Markdown page (remark-markban) and in a Svelte page (@markban/svelte)."
+  "description": "SvelteKit 3 + Svelte 5 + mdsvex: a markban board in a Markdown page (remark-markban) and in a Svelte page (@markban/svelte)."
 }
