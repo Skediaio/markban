@@ -536,3 +536,12 @@ fn discovery_failure_is_a_one_line_error() {
     );
     assert_eq!(o.stderr.lines().count(), 1);
 }
+
+#[test]
+fn edit_description_and_append_conflict() {
+    let dir = init_board();
+    ok(dir.path(), &["add", "A", "-c", "Todo", "--id", "a"]);
+    let o = mb(dir.path(), &["edit", "a", "-d", "-", "--append", "-"]);
+    assert_eq!(o.code, 2, "stderr {}", o.stderr);
+    assert!(o.stderr.contains("cannot be used with"), "{}", o.stderr);
+}

@@ -58,12 +58,17 @@ fn main() -> ExitCode {
     }
 }
 
-/// Replaces C0 and C1 control characters (except newline and tab) with U+FFFD, so board
+/// Unicode bidirectional controls, which can reorder displayed text.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{200e}' | '\u{200f}' | '\u{61c}')
+}
+
+/// Replaces C0 and C1 control characters (except newline and tab) and bidi controls with U+FFFD, so board
 /// content cannot inject terminal escape sequences. Text mode only; `--json` stays exact.
 fn sanitize(text: &str) -> String {
     text.chars()
         .map(|c| {
-            if c.is_control() && c != '\n' && c != '\t' {
+            if (c.is_control() && c != '\n' && c != '\t') || is_bidi_control(c) {
                 '\u{fffd}'
             } else {
                 c
@@ -432,6 +437,15 @@ mod tests {
         assert_eq!(
             sanitize("a\u{1b}[0m\tb\nc\u{9b}d\r"),
             "a\u{fffd}[0m\tb\nc\u{fffd}d\u{fffd}"
+        );
+    }
+
+    #[test]
+    fn sanitize_replaces_bidi_controls() {
+        let bidi = "\u{202a}\u{202b}\u{202c}\u{202d}\u{202e}\u{2066}\u{2067}\u{2068}\u{2069}\u{200e}\u{200f}\u{61c}";
+        assert_eq!(
+            sanitize(&format!("a{bidi}b")),
+            format!("a{}b", "\u{fffd}".repeat(12))
         );
     }
 }
