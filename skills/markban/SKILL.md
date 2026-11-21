@@ -28,15 +28,22 @@ Commands, output and exit codes are identical in both modes.
 
 The person steering you may never use git themselves (a designer, a product manager). You do it for them:
 
-1. Before reading the board: `git pull --rebase` in the board directory.
-2. After a change: `git add board.md cards/` (only what you changed), then commit with a short message that says
-   what changed on the board (`board: move landing-page to Dev`), then `git push`.
-3. Push rejected: `git pull --rebase`, then `git push` again. A conflict in a card file means two people
-   changed the same card: show both versions to the person and ask which one to keep.
-4. `git config user.name` is empty or a placeholder: ask the person for their name, role and e-mail and set
-   them for this repository only: `git config user.name "Anna (designer)"`, `git config user.email ...`.
-   Never commit under someone else's name and never change the global git config.
-5. Git asks for a password or token: stop and tell the person to enter it themselves in a terminal. Never ask
+1. `git pull --rebase` before reading the board **and again right before every change**: others push all day.
+2. After a change: `git add board.md cards/`, commit with one line that says what changed on the board
+   (`board: move landing-page to Dev`; several changes: `board: add X to Backlog, move Y to Dev`), then
+   `git push`.
+3. Push rejected: `git pull --rebase`, then `git push` again.
+4. The rebase stops on a conflict in a card file (someone changed the same card):
+   - Run `git checkout --ours <file>`. During a rebase "ours" is the version already pushed by the other person.
+   - Redo your own change on top with `markban` (for example the same `edit --append`), then `git add <file>`
+     and `GIT_EDITOR=true git rebase --continue`, then push.
+   - Ask the person only when the two changes contradict (the same card moved to two different columns, the
+     same text rewritten two ways). Never commit a file with `<<<<<<<` conflict markers.
+5. Before the first commit, check `git config user.name`. Empty, `Your Name` or anything that is not this
+   person you work for: ask their name, role and e-mail, and set them for this repository only:
+   `git config user.name "Anna (designer)"`, `git config user.email anna@example.com`. Never commit under
+   someone else's name and never change the global git config.
+6. Git asks for a password or token: stop and tell the person to enter it themselves in a terminal. Never ask
    them to paste a token into the chat.
 
 ## 3. Commands
