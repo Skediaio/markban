@@ -15,6 +15,7 @@ use dioxus::prelude::*;
 use markban_core::view::{BoardView, CardSummary};
 
 const STYLE: Asset = asset!("/assets/main.css");
+const DRAG_SCROLL: Asset = asset!("/assets/drag-scroll.js");
 
 #[cfg(not(feature = "server"))]
 fn main() {
@@ -84,6 +85,7 @@ fn App() -> Element {
 
     rsx! {
         document::Stylesheet { href: STYLE }
+        document::Script { src: DRAG_SCROLL, defer: true }
         document::Title { "Markban" }
         main { class: "app",
             if let Some(Ok(true)) = *login.read() {
