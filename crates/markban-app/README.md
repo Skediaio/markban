@@ -26,11 +26,21 @@ Open <http://127.0.0.1:8080>.
 | `MARKBAN_BOARD` | current directory | Board directory (contains `board.md`). |
 | `IP` | `127.0.0.1` | Address to bind. Keep it on loopback. |
 | `PORT` | `8080` | Port. |
+| `MARKBAN_ALLOWED_HOSTS` | empty | Comma-separated extra host names the server accepts in the `Host` header (a name, or `name:port`). |
+
+## Security
+
+- **Host check (DNS rebinding).** Every request must carry a `Host` of `localhost`, `127.0.0.1` or `[::1]`
+  (any port); anything else gets `403`. To serve the viewer under another name, for example behind a reverse
+  proxy, list it: `MARKBAN_ALLOWED_HOSTS=board.example.com,board.lan:8080`.
+- **Markdown is sanitised** (`ammonia`): no scripts, no event handlers, no `javascript:` links, and images with
+  a remote `src` are removed so a card cannot make your browser call out. Task-list items show as disabled
+  checkboxes; the viewer never writes.
 
 ## Server functions
 
 - `get_board()`: the current `BoardView`.
-- `get_card(id)`: title, column and the description as sanitised HTML (`pulldown-cmark` then `ammonia`).
+- `get_card(id)`: title, column name and the description as sanitised HTML (`pulldown-cmark` then `ammonia`).
 - `wait_for_change(since)`: long poll, returns `(revision, BoardView)` when the revision differs from `since`,
   or after about 25 seconds.
 
