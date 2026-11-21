@@ -16,6 +16,8 @@ use std::process::ExitCode;
 /// 3 contention (another writer changed the board; safe to retry).
 const EXIT_INVALID: u8 = 1;
 const EXIT_CONTENDED: u8 = 3;
+/// Some files were written before a failure: inspect the board, do not retry blindly.
+const EXIT_PARTIAL: u8 = 4;
 
 /// A failure to report: a one-line message and the exit code.
 struct Fail {
@@ -32,14 +34,14 @@ impl From<String> for Fail {
     }
 }
 
-/// The exit code for a failed run. Contention and conflicts are retryable (3); everything else
-/// needs a different input (1).
-///
-/// NOTE: a `RunError::PartiallyApplied` variant is planned in `markban-core`. The wildcard arm
-/// maps it to 1 for now; decide its code (and update spec section 8) when it lands.
+/// The exit code for a failed run (spec section 8): contention, the board lock and conflicts are
+/// retryable (3), a partial write needs inspection (4), everything else needs a different input (1).
 fn exit_code_for(error: &RunError) -> u8 {
     match error {
-        RunError::Contended { .. } | RunError::Apply(ApplyError::Conflict { .. }) => EXIT_CONTENDED,
+        RunError::Contended { .. }
+        | RunError::Locked { .. }
+        | RunError::Apply(ApplyError::Conflict { .. }) => EXIT_CONTENDED,
+        RunError::PartiallyApplied { .. } => EXIT_PARTIAL,
         _ => EXIT_INVALID,
     }
 }
@@ -400,6 +402,20 @@ mod tests {
             path: "cards/a.md".into(),
         });
         assert_eq!(exit_code_for(&conflict), EXIT_CONTENDED);
+        let locked = RunError::Locked {
+            path: ".markban.lock".into(),
+        };
+        assert_eq!(exit_code_for(&locked), EXIT_CONTENDED);
+    }
+
+    #[test]
+    fn partial_write_exits_4() {
+        let partial = RunError::PartiallyApplied {
+            written: vec!["board.md".into()],
+            failed: "cards/a.md".into(),
+            reason: "conflict".into(),
+        };
+        assert_eq!(exit_code_for(&partial), EXIT_PARTIAL);
     }
 
     #[test]

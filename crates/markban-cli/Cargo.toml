@@ -3,6 +3,7 @@ name = "markban-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "The markban command line: a thin layer over markban-core."
 
 [[bin]]

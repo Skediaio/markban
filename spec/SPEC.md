@@ -204,6 +204,7 @@ Exit codes:
 | 1 | Invalid input or the command was refused: fix the input. `check` also uses 1 when the board has errors. |
 | 2 | Usage error (unknown option, missing argument). |
 | 3 | Contention: another writer changed the board while the command ran. Nothing was written; retry. |
+| 4 | Partially applied: some files were written before a failure. Run `markban check` and inspect before retrying. |
 
 ## Reserved for later versions
 
