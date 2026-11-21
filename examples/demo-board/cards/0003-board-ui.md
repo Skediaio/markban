@@ -1,9 +1,7 @@
 ---
-title: Trello-style board UI
+title: Read-only board viewer
 column: backlog
-order: 2000
-labels: [code]
-created: 2026-11-21
+order: 1000
 ---
 
-View and edit a board: columns, drag and drop, card detail with checklist and comments.
+Dioxus fullstack page that shows the board and refreshes live when agents change it.

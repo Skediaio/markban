@@ -1,9 +1,7 @@
 ---
-title: Parser and serializer library
-column: backlog
+title: Core library and CLI
+column: doing
 order: 1000
-labels: [code]
-created: 2026-11-21
 ---
 
-Markdown ↔ typed board model with a lossless round-trip.
+Lossless parser and writer, `check`, commands, and the `markban` command line.
