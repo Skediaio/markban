@@ -56,7 +56,8 @@ if [ "$os" = "Darwin" ]; then
     xattr -d com.apple.quarantine "$INSTALL_DIR/markban" 2>/dev/null || true
 fi
 
-download "$REPO_URL/SKILL.md" "$tmp/SKILL.md"
+# The skill comes from main, so skill fixes reach people without a new release.
+download "https://raw.githubusercontent.com/Skediaio/markban/main/skills/markban/SKILL.md" "$tmp/SKILL.md"
 for dir in "$HOME/.claude/skills/markban" "$HOME/.config/opencode/skills/markban"; do
     mkdir -p "$dir"
     cp "$tmp/SKILL.md" "$dir/SKILL.md"

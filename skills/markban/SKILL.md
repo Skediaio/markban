@@ -13,7 +13,7 @@ atomic, checked and the cheapest in tokens. Never invent your own format.
 - `MARKBAN_URL` is set: **server mode**. The board is `MARKBAN_BOARD` (a board id) or `-b <id>`. Run
   `markban boards` to see the boards your token may use. No git, no files: the server is the source of truth.
 - Otherwise: **local mode**. The board is the nearest directory with a `board.md` (from the current directory
-  upwards), or `-C <dir>`, or `MARKBAN_BOARD=<dir>`. The files are in git; commit them like any other change.
+  upwards), or `-C <dir>`, or `MARKBAN_BOARD=<dir>`. The files are in git: see "Local mode" below.
 
 Commands, output and exit codes are identical in both modes.
 
@@ -23,6 +23,21 @@ Commands, output and exit codes are identical in both modes.
 2. `markban show <id>` only for a card whose description you need.
 3. Change it with one command, or with `markban run` for several changes.
 4. Read the result: success prints only the affected id. Do not run `ls` again just to confirm.
+
+### Local mode: you handle git, the person does not
+
+The person steering you may never use git themselves (a designer, a product manager). You do it for them:
+
+1. Before reading the board: `git pull --rebase` in the board directory.
+2. After a change: `git add board.md cards/` (only what you changed), then commit with a short message that says
+   what changed on the board (`board: move landing-page to Dev`), then `git push`.
+3. Push rejected: `git pull --rebase`, then `git push` again. A conflict in a card file means two people
+   changed the same card: show both versions to the person and ask which one to keep.
+4. `git config user.name` is empty or a placeholder: ask the person for their name, role and e-mail and set
+   them for this repository only: `git config user.name "Anna (designer)"`, `git config user.email ...`.
+   Never commit under someone else's name and never change the global git config.
+5. Git asks for a password or token: stop and tell the person to enter it themselves in a terminal. Never ask
+   them to paste a token into the chat.
 
 ## 3. Commands
 

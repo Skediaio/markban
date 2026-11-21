@@ -19,7 +19,7 @@ try {
     Copy-Item -Path (Join-Path $tmp 'markban.exe') -Destination $installDir -Force
 
     $skill = Join-Path $tmp 'SKILL.md'
-    Invoke-WebRequest -UseBasicParsing -Uri "$base/SKILL.md" -OutFile $skill
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/Skediaio/markban/main/skills/markban/SKILL.md" -OutFile $skill
     foreach ($dir in @((Join-Path $HOME '.claude\skills\markban'), (Join-Path $HOME '.config\opencode\skills\markban'))) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         Copy-Item -Path $skill -Destination (Join-Path $dir 'SKILL.md') -Force
