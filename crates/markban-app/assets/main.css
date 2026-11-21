@@ -141,7 +141,7 @@ body {
   color: var(--text);
   border-radius: 12px;
   width: 100%;
-  max-width: 640px;
+  max-width: 960px;
   padding: 20px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
@@ -168,7 +168,7 @@ body {
 .markdown code { font-family: ui-monospace, monospace; font-size: 0.9em; }
 .markdown img { max-width: 100%; }
 .markdown table { display: block; overflow-x: auto; border-collapse: collapse; margin: 0 0 12px; }
-.markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
+.markdown th, .markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; overflow-wrap: normal; }
 .markdown th { background: var(--column); }
 .markdown .hl-comment { color: var(--hl-comment); font-style: italic; }
 .markdown .hl-keyword, .markdown .hl-storage { color: var(--hl-keyword); }
