@@ -39,7 +39,7 @@ The person steering you may never use git themselves (a designer, a product mana
      and `GIT_EDITOR=true git rebase --continue`, then push.
    - Ask the person only when the two changes contradict (the same card moved to two different columns, the
      same text rewritten two ways). Never commit a file with `<<<<<<<` conflict markers.
-5. Before the first commit, check `git config user.name`. Empty, `Your Name` or anything that is not this
+5. Before the first commit, check `git config user.name`. Empty, a placeholder such as `Your Name`, or clearly not the
    person you work for: ask their name, role and e-mail, and set them for this repository only:
    `git config user.name "Anna (designer)"`, `git config user.email anna@example.com`. Never commit under
    someone else's name and never change the global git config.
