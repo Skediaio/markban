@@ -78,7 +78,7 @@ pub enum Cmd {
         #[arg(short, long, value_name = "TEXT")]
         description: Option<String>,
         /// Append a line to the description, or `-` to read it from stdin.
-        #[arg(long, value_name = "TEXT")]
+        #[arg(long, value_name = "TEXT", conflicts_with = "description")]
         append: Option<String>,
     },
     /// Remove a card.

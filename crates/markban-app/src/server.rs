@@ -11,7 +11,7 @@ use markban_core::view::{BoardView, view};
 use notify_debouncer_full::notify::{self, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -60,9 +60,17 @@ pub fn render_markdown(markdown: &str) -> String {
     sanitizer.clean(&html).to_string()
 }
 
+type BoardDebouncer = Debouncer<notify::RecommendedWatcher, RecommendedCache>;
+
 /// Watches a board directory and bumps a revision on every change to `board.md` or `cards/*.md`.
+///
+/// Only the board directory and `cards/` are watched, both non-recursively: a board may live at
+/// a repository root next to `.git/` and `target/`, which must not cost watches or churn.
 pub struct Watcher {
-    _debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
+    debouncer: Arc<Mutex<BoardDebouncer>>,
+    watched: Arc<Mutex<Vec<PathBuf>>>,
+    root: PathBuf,
+    tx: Arc<watch::Sender<u64>>,
 }
 
 impl Watcher {
@@ -72,32 +80,96 @@ impl Watcher {
     /// A message when the directory cannot be watched.
     pub fn start(dir: &Path) -> Result<(Self, watch::Receiver<u64>), String> {
         let (tx, rx) = watch::channel(1_u64);
+        let tx = Arc::new(tx);
         let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-        let watched = root.clone();
-        let handler = move |result: DebounceEventResult| {
-            let relevant = match &result {
-                Ok(events) => events.iter().any(|event| {
-                    !event.kind.is_access() && event.paths.iter().any(|p| is_board_path(&root, p))
-                }),
-                Err(_) => true,
-            };
-            if relevant {
-                tx.send_modify(|rev| *rev += 1);
+        let (cards_tx, cards_rx) = std::sync::mpsc::channel::<()>();
+        let handler = {
+            let root = root.clone();
+            let tx = Arc::clone(&tx);
+            move |result: DebounceEventResult| {
+                let cards = root.join("cards");
+                let relevant = match &result {
+                    Ok(events) => {
+                        if events
+                            .iter()
+                            .any(|e| e.kind.is_create() && e.paths.contains(&cards))
+                        {
+                            let _ = cards_tx.send(());
+                        }
+                        events.iter().any(|event| {
+                            !event.kind.is_access()
+                                && event.paths.iter().any(|p| is_board_path(&root, p))
+                        })
+                    }
+                    Err(_) => true,
+                };
+                if relevant {
+                    tx.send_modify(|rev| *rev += 1);
+                }
             }
         };
         let mut debouncer = new_debouncer(DEBOUNCE, None, handler)
             .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-        // The whole directory, recursively: it is tiny, and this also sees a `cards/` that is
-        // created after the viewer started. Events are filtered in the handler.
         debouncer
-            .watch(&watched, RecursiveMode::Recursive)
-            .map_err(|e| format!("cannot watch '{}': {e}", watched.display()))?;
-        Ok((
-            Self {
-                _debouncer: debouncer,
-            },
-            rx,
-        ))
+            .watch(&root, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("cannot watch '{}': {e}", root.display()))?;
+        let watcher = Self {
+            debouncer: Arc::new(Mutex::new(debouncer)),
+            watched: Arc::new(Mutex::new(vec![root.clone()])),
+            root,
+            tx,
+        };
+        watcher.ensure_cards();
+        // A `cards/` that appears after the start is watched as soon as its create event arrives.
+        // The thread holds only a weak reference, so dropping the watcher stops everything.
+        let debouncer = Arc::downgrade(&watcher.debouncer);
+        let (watched, root, tx) = (
+            Arc::clone(&watcher.watched),
+            watcher.root.clone(),
+            Arc::clone(&watcher.tx),
+        );
+        std::thread::spawn(move || {
+            while cards_rx.recv().is_ok() {
+                let Some(debouncer) = debouncer.upgrade() else {
+                    break;
+                };
+                add_cards_watch(&debouncer, &watched, &root, &tx);
+            }
+        });
+        Ok((watcher, rx))
+    }
+
+    /// Adds the `cards/` watch when it is missing and the directory exists. Cheap to call often.
+    pub fn ensure_cards(&self) {
+        add_cards_watch(&self.debouncer, &self.watched, &self.root, &self.tx);
+    }
+
+    /// The directories currently watched (all non-recursively).
+    #[cfg(test)]
+    #[must_use]
+    pub fn watched(&self) -> Vec<PathBuf> {
+        self.watched.lock().map(|w| w.clone()).unwrap_or_default()
+    }
+}
+
+/// Watches `<root>/cards` non-recursively unless it already is, then bumps the revision: files
+/// written before the watch existed would otherwise go unseen.
+fn add_cards_watch(
+    debouncer: &Mutex<BoardDebouncer>,
+    watched: &Mutex<Vec<PathBuf>>,
+    root: &Path,
+    tx: &watch::Sender<u64>,
+) {
+    let cards = root.join("cards");
+    let (Ok(mut watched), Ok(mut debouncer)) = (watched.lock(), debouncer.lock()) else {
+        return;
+    };
+    if watched.contains(&cards) {
+        return;
+    }
+    if debouncer.watch(&cards, RecursiveMode::NonRecursive).is_ok() {
+        watched.push(cards);
+        tx.send_modify(|rev| *rev += 1);
     }
 }
 
@@ -195,7 +267,7 @@ fn init_or_retry<T>(
 pub struct State {
     dir: PathBuf,
     rx: watch::Receiver<u64>,
-    _watcher: Watcher,
+    watcher: Watcher,
 }
 
 static STATE: OnceLock<State> = OnceLock::new();
@@ -206,16 +278,15 @@ static STATE: OnceLock<State> = OnceLock::new();
 /// # Errors
 /// A message when the watcher cannot start.
 pub fn state() -> Result<&'static State, String> {
-    init_or_retry(&STATE, || {
+    let state = init_or_retry(&STATE, || {
         let dir =
             std::env::var_os("MARKBAN_BOARD").map_or_else(|| PathBuf::from("."), PathBuf::from);
         let (watcher, rx) = Watcher::start(&dir)?;
-        Ok(State {
-            dir,
-            rx,
-            _watcher: watcher,
-        })
-    })
+        Ok(State { dir, rx, watcher })
+    })?;
+    // A `cards/` that was missing at the start is picked up on the next request.
+    state.watcher.ensure_cards();
+    Ok(state)
 }
 
 fn failed_view(message: String) -> BoardView {
@@ -477,6 +548,23 @@ mod tests {
             .await
             .expect("edit in the new cards/ seen")
             .expect("sender alive");
+    }
+
+    #[tokio::test]
+    async fn nested_directories_are_not_watched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("board.md"), "---\nmarkban: 0.1\n---\n").expect("board");
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        std::fs::create_dir_all(dir.path().join("deep/x")).expect("deep");
+        let (watcher, rx) = Watcher::start(dir.path()).expect("watcher");
+        let root = dir.path().canonicalize().expect("root");
+        let mut watched = watcher.watched();
+        watched.sort();
+        assert_eq!(watched, vec![root.clone(), root.join("cards")]);
+        let before = *rx.borrow();
+        std::fs::write(dir.path().join("deep/x/y.md"), "x").expect("nested");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(*rx.borrow(), before);
     }
 
     #[tokio::test]
