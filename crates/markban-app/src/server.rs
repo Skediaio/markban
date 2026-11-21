@@ -196,8 +196,12 @@ fn extra_hosts() -> &'static [String] {
 }
 
 /// Middleware: answers 403 unless the request's `Host` is allowed (see [`host_allowed`]).
+/// `/healthz` is exempt: it reveals nothing, and container health checks reach it under
+/// whatever host name the container itself uses.
 pub async fn host_guard(request: Request, next: Next) -> Response {
-    if request_host(&request).is_some_and(|h| host_allowed(&h, extra_hosts())) {
+    if request.uri().path() == "/healthz"
+        || request_host(&request).is_some_and(|h| host_allowed(&h, extra_hosts()))
+    {
         next.run(request).await
     } else {
         (
@@ -376,6 +380,36 @@ impl State {
 #[allow(clippy::expect_used)] // tests may expect
 mod tests {
     use super::*;
+
+    async fn guarded_status(path: &str, host: &str) -> StatusCode {
+        use dioxus::server::axum::Router;
+        use dioxus::server::axum::body::Body;
+        use dioxus::server::axum::routing::get;
+        use tower::ServiceExt;
+        let app = Router::new()
+            .route("/", get(|| async { "the board" }))
+            .route("/healthz", get(|| async { "ok" }))
+            .layer(dioxus::server::axum::middleware::from_fn(host_guard));
+        let request = Request::builder()
+            .uri(path)
+            .header("host", host)
+            .body(Body::empty())
+            .expect("request");
+        app.oneshot(request).await.expect("infallible").status()
+    }
+
+    #[tokio::test]
+    async fn healthz_ignores_the_host_guard_but_pages_do_not() {
+        assert_eq!(
+            guarded_status("/healthz", "evil.example").await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            guarded_status("/", "evil.example").await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(guarded_status("/", "127.0.0.1:8080").await, StatusCode::OK);
+    }
 
     #[test]
     fn strips_script_tags() {
