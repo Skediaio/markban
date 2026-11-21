@@ -54,4 +54,4 @@ Dependencies point downwards only.
 
 ## Licence
 
-MIT.
+MIT, see [LICENSE](LICENSE).
