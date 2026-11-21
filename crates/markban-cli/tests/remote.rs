@@ -27,6 +27,7 @@ fn bin() -> Command {
         "MARKBAN_URL",
         "MARKBAN_TOKEN",
         "MARKBAN_DATA",
+        "MARKBAN_ALLOW_INSECURE_HTTP",
     ] {
         cmd.env_remove(var);
     }
@@ -63,14 +64,8 @@ fn server() -> Server {
     access::add_board(data.path(), "kuuno", "Kuuno", &cols).unwrap();
     access::add_board(data.path(), "other", "Other", &cols).unwrap();
     let anna = access::add_user(data.path(), "anna", &["kuuno".into()], false).unwrap();
-    let addr = markban_server::spawn(
-        Config {
-            data: data.path().to_path_buf(),
-            allowed_hosts: Vec::new(),
-        },
-        "127.0.0.1:0",
-    )
-    .unwrap();
+    let addr =
+        markban_server::spawn(Config::new(data.path().to_path_buf()), "127.0.0.1:0").unwrap();
     Server {
         data,
         url: format!("http://{addr}"),
@@ -550,4 +545,247 @@ fn serve_without_a_data_directory_fails_fast() {
     );
     assert_eq!(o.code, 1);
     assert!(o.stderr.contains("markban server init"), "{}", o.stderr);
+}
+
+// ---- transport safety ----
+
+#[test]
+fn plain_http_to_a_remote_host_is_refused_before_sending_the_token() {
+    // `.invalid` never resolves: had a request been tried, the error would be "cannot reach".
+    for url in [
+        "http://board.invalid:7171".to_string(),
+        "http://192.0.2.1:9".to_string(),
+        "http://[::2]:9".to_string(),
+        "http://localhost.evil.invalid".to_string(),
+    ] {
+        let mut cmd = bin();
+        cmd.env("MARKBAN_URL", &url)
+            .env("MARKBAN_TOKEN", "mb_secret-token")
+            .args(["-b", "kuuno", "ls"]);
+        let o = out(&mut cmd, None);
+        assert_eq!(o.code, 1, "{url}");
+        assert_eq!(o.stderr.lines().count(), 1, "{url}: {}", o.stderr);
+        assert!(o.stderr.contains("https://"), "{url}: {}", o.stderr);
+        assert!(
+            o.stderr.contains("--allow-insecure-http"),
+            "{url}: {}",
+            o.stderr
+        );
+        assert!(!o.stderr.contains("secret-token"));
+    }
+}
+
+#[test]
+fn plain_http_is_fine_on_loopback_and_with_the_escape_hatch() {
+    let s = server();
+    let port = s.url.rsplit(':').next().unwrap().to_string();
+    for url in [
+        s.url.clone(),
+        format!("http://localhost:{port}"),
+        format!("http://LocalHost:{port}/"),
+    ] {
+        let mut cmd = bin();
+        cmd.env("MARKBAN_URL", &url)
+            .env("MARKBAN_TOKEN", &s.anna)
+            .args(["boards"]);
+        let o = out(&mut cmd, None);
+        assert_eq!(o.code, 0, "{url}: {}", o.stderr);
+    }
+    // The escape hatch only lifts the transport check: an unreachable host still fails there.
+    for (flag, env) in [(true, false), (false, true)] {
+        let mut cmd = bin();
+        cmd.env("MARKBAN_URL", "http://unreachable.invalid:9")
+            .env("MARKBAN_TOKEN", "mb_x");
+        if flag {
+            cmd.arg("--allow-insecure-http");
+        }
+        if env {
+            cmd.env("MARKBAN_ALLOW_INSECURE_HTTP", "1");
+        }
+        let o = out(cmd.args(["-b", "kuuno", "ls"]), None);
+        assert_eq!(o.code, 1);
+        assert!(o.stderr.contains("cannot reach"), "{}", o.stderr);
+    }
+}
+
+#[test]
+fn a_proxy_in_the_environment_is_not_used_for_loopback_http() {
+    let s = server();
+    // A dead proxy: any request through it fails.
+    let dead = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let proxy = format!("http://{}", dead.local_addr().unwrap());
+    drop(dead);
+    let mut cmd = bin();
+    for var in [
+        "ALL_PROXY",
+        "all_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+    ] {
+        cmd.env(var, &proxy);
+    }
+    cmd.env_remove("NO_PROXY").env_remove("no_proxy");
+    cmd.env("MARKBAN_URL", &s.url)
+        .env("MARKBAN_TOKEN", &s.anna)
+        .args(["boards"]);
+    let o = out(&mut cmd, None);
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.stdout, "kuuno  Kuuno\n");
+}
+
+#[test]
+fn a_url_with_credentials_is_refused_without_echoing_them() {
+    let s = server();
+    let url = s.url.replace("http://", "http://anna:hunter2@");
+    let mut cmd = bin();
+    cmd.env("MARKBAN_URL", &url)
+        .env("MARKBAN_TOKEN", &s.anna)
+        .args(["boards"]);
+    let o = out(&mut cmd, None);
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);
+    assert!(o.stderr.contains("user name or password"), "{}", o.stderr);
+    assert!(!o.stderr.contains("hunter2") && !o.stderr.contains("anna:"));
+}
+
+// ---- server board remove ----
+
+#[test]
+fn board_remove_moves_the_board_away_and_drops_its_grants() {
+    let s = server();
+    let data = s.data.path();
+    assert_eq!(
+        admin(data, &["user", "boards", "anna", "kuuno,other"]).code,
+        0
+    );
+    let o = admin(data, &["board", "remove", "other"]);
+    assert_eq!((o.code, o.stdout.as_str()), (0, "other\n"), "{}", o.stderr);
+    assert!(!s.board("other").exists());
+    let removed: Vec<_> = std::fs::read_dir(data.join("removed"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(removed.len(), 1);
+    assert!(removed[0].join("board.md").is_file());
+    let text = std::fs::read_to_string(data.join("access.toml")).unwrap();
+    assert!(text.contains(r#"boards = ["kuuno"]"#), "{text}");
+    assert_eq!(admin(data, &["board", "list"]).stdout, "kuuno  Kuuno\n");
+    let o = admin(data, &["board", "remove", "other"]);
+    assert_eq!(o.code, 1);
+    assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);
+}
+
+#[test]
+fn serve_takes_limit_flags() {
+    let dir = TempDir::new().unwrap();
+    let o = out(
+        bin()
+            .args([
+                "serve",
+                "--listen",
+                "127.0.0.1:0",
+                "--max-cards",
+                "10",
+                "--max-card-bytes",
+                "4096",
+                "--max-requests",
+                "8",
+                "--data",
+            ])
+            .arg(dir.path()),
+        None,
+    );
+    // The flags parse; the empty data directory is what stops it.
+    assert_eq!(o.code, 1, "{}", o.stderr);
+    assert!(o.stderr.contains("markban server init"), "{}", o.stderr);
+}
+
+// ---- tokens to a file ----
+
+#[test]
+fn init_and_user_add_can_write_the_token_to_a_private_file() {
+    let parent = TempDir::new().unwrap();
+    let data = parent.path().join("data");
+    let file = parent.path().join("admin.token");
+    let o = out(
+        bin()
+            .args(["server", "init"])
+            .arg(&data)
+            .arg("--token-file")
+            .arg(&file),
+        None,
+    );
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(o.stdout, "", "the token must not reach stdout");
+    let token = std::fs::read_to_string(&file).unwrap();
+    assert!(token.starts_with("mb_") && token.ends_with('\n'));
+    assert!(!o.stderr.contains(token.trim()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    assert!(
+        access::Access::load(&data)
+            .unwrap()
+            .authenticate(token.trim())
+            .is_some()
+    );
+
+    // user add: an existing file is refused before anything changes.
+    let o = admin(
+        &data,
+        &["user", "add", "anna", "--boards", "*", "--token-file"],
+    );
+    assert_eq!(o.code, 2, "--token-file needs a path");
+    let o = out(
+        bin()
+            .arg("server")
+            .arg("--data")
+            .arg(&data)
+            .args(["user", "add", "anna", "--boards", "*", "--token-file"])
+            .arg(&file),
+        None,
+    );
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("already exists"), "{}", o.stderr);
+    assert!(
+        !std::fs::read_to_string(data.join("access.toml"))
+            .unwrap()
+            .contains("anna")
+    );
+    let anna_file = parent.path().join("anna.token");
+    let o = out(
+        bin()
+            .arg("server")
+            .arg("--data")
+            .arg(&data)
+            .args(["user", "add", "anna", "--boards", "*", "--token-file"])
+            .arg(&anna_file),
+        None,
+    );
+    assert_eq!((o.code, o.stdout.as_str()), (0, ""), "{}", o.stderr);
+    let anna = std::fs::read_to_string(&anna_file).unwrap();
+    assert!(
+        access::Access::load(&data)
+            .unwrap()
+            .authenticate(anna.trim())
+            .is_some()
+    );
+
+    // init into an existing token file is refused before the data directory is created.
+    let other = parent.path().join("other");
+    let o = out(
+        bin()
+            .args(["server", "init"])
+            .arg(&other)
+            .arg("--token-file")
+            .arg(&file),
+        None,
+    );
+    assert_eq!(o.code, 1);
+    assert!(!other.join("access.toml").exists());
 }

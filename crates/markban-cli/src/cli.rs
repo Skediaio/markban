@@ -22,6 +22,10 @@ pub struct Cli {
     /// remote mode and a directory locally).
     #[arg(short = 'b', long, global = true, value_name = "ID")]
     pub board: Option<String>,
+    /// Remote mode: allow plain http:// to a host that is not loopback, which sends the token
+    /// in clear (default: $MARKBAN_ALLOW_INSECURE_HTTP=1). Only on a network you trust.
+    #[arg(long, global = true)]
+    pub allow_insecure_http: bool,
     #[command(subcommand)]
     pub command: Cmd,
 }
@@ -136,6 +140,18 @@ pub enum Cmd {
         /// Address to listen on; keep it on loopback behind a reverse proxy.
         #[arg(long, value_name = "ADDR", default_value = markban_server::DEFAULT_LISTEN)]
         listen: String,
+        /// Most cards a board may hold after a change through the API.
+        #[arg(long, value_name = "N", default_value_t = markban_server::DEFAULT_MAX_CARDS)]
+        max_cards: usize,
+        /// Largest card file, in bytes, a change through the API may write.
+        #[arg(long, value_name = "BYTES", default_value_t = markban_server::DEFAULT_MAX_CARD_BYTES)]
+        max_card_bytes: usize,
+        /// Requests handled at once; more are answered 503 (exit code 3) at once.
+        #[arg(long, value_name = "N", default_value_t = markban_server::DEFAULT_MAX_CONCURRENT)]
+        max_requests: usize,
+        /// Longest time for one request, body included, in seconds.
+        #[arg(long, value_name = "SECONDS", default_value_t = markban_server::DEFAULT_REQUEST_TIMEOUT_SECS)]
+        request_timeout: u64,
     },
     /// Administer a server's data directory directly on disk (never over HTTP).
     Server {
@@ -155,11 +171,14 @@ pub enum ServerCmd {
         /// Name of the first user.
         #[arg(long, value_name = "NAME", default_value = "admin")]
         admin: String,
+        /// Write the token to this new file (mode 0600) instead of stdout.
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
     },
     /// Add or remove users, or change their boards.
     #[command(subcommand)]
     User(UserCmd),
-    /// Add or list boards.
+    /// Add, list or remove boards.
     #[command(subcommand)]
     Board(BoardCmd),
 }
@@ -175,6 +194,9 @@ pub enum UserCmd {
         /// Mark the user as an administrator.
         #[arg(long)]
         admin: bool,
+        /// Write the token to this new file (mode 0600) instead of stdout.
+        #[arg(long, value_name = "PATH")]
+        token_file: Option<PathBuf>,
     },
     /// Remove a user; its token stops working at once.
     Remove { name: String },
@@ -197,6 +219,9 @@ pub enum BoardCmd {
     },
     /// List all boards.
     List,
+    /// Take a board out: move it to <DATA>/removed/<id>-<time>/ (nothing is deleted) and drop
+    /// it from every user's boards.
+    Remove { id: String },
 }
 
 #[derive(Debug, Subcommand)]

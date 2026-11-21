@@ -211,6 +211,9 @@ pub enum RunError {
     Apply(#[from] ApplyError),
     #[error("board is locked by another markban process ({path}); try again shortly")]
     Locked { path: String },
+    /// The guard of [`run_guarded`] refused the result; nothing was written.
+    #[error("{reason}")]
+    Refused { reason: String },
     #[error(
         "applied to {}; failed at {failed}: {reason}; run `markban check` and inspect",
         .written.join(", ")
@@ -807,6 +810,24 @@ pub fn run(dir: &Path, cmds: &[Command]) -> Result<Vec<Outcome>, RunError> {
     run_with_hook(dir, cmds, &mut |_| {})
 }
 
+/// What [`run_guarded`] checks: the board before the commands (`None` for `board.init`) and the
+/// board they would produce. An `Err` is a one-line reason.
+pub type Guard<'a> = &'a dyn Fn(Option<&Board>, &Board) -> Result<(), String>;
+
+/// [`run`] with a guard called after the commands executed in memory and before anything is
+/// written, under the board lock. A refusal is [`RunError::Refused`] (exit code 1) and writes
+/// nothing. Servers use it for resource limits.
+///
+/// # Errors
+/// [`RunError`].
+pub fn run_guarded(
+    dir: &Path,
+    cmds: &[Command],
+    guard: Guard<'_>,
+) -> Result<Vec<Outcome>, RunError> {
+    run_inner(dir, cmds, guard, &mut |_| {}, &mut |_, _| Ok(()))
+}
+
 /// [`run_with_hook`] plus a write hook, see [`apply_with_hook`]. For tests.
 ///
 /// # Errors
@@ -818,6 +839,16 @@ pub fn run_with_hooks(
     between: &mut dyn FnMut(usize),
     write: Hook<'_>,
 ) -> Result<Vec<Outcome>, RunError> {
+    run_inner(dir, cmds, &|_, _| Ok(()), between, write)
+}
+
+fn run_inner(
+    dir: &Path,
+    cmds: &[Command],
+    guard: Guard<'_>,
+    between: &mut dyn FnMut(usize),
+    write: Hook<'_>,
+) -> Result<Vec<Outcome>, RunError> {
     if cmds.is_empty() {
         return Ok(Vec::new());
     }
@@ -825,7 +856,7 @@ pub fn run_with_hooks(
     let mut last = String::new();
     let mut result = None;
     for attempt in 0..MAX_ATTEMPTS {
-        match attempt_run(dir, cmds, &mut |()| between(attempt), &mut *write) {
+        match attempt_run(dir, cmds, guard, &mut |()| between(attempt), &mut *write) {
             Err(RunError::Apply(ApplyError::Conflict { path })) => last = path,
             other => {
                 result = Some(other);
@@ -875,6 +906,7 @@ fn finish(applied: Result<Vec<String>, Failure>) -> Result<(), RunError> {
 fn attempt_run(
     dir: &Path,
     cmds: &[Command],
+    guard: Guard<'_>,
     between: &mut dyn FnMut(()),
     write: Hook<'_>,
 ) -> Result<Vec<Outcome>, RunError> {
@@ -900,6 +932,7 @@ fn attempt_run(
         outcomes.extend(
             execute_batch(&mut board, cmds.get(1..).unwrap_or(&[])).map_err(command_error(1))?,
         );
+        guard(None, &board).map_err(|reason| RunError::Refused { reason })?;
         between(());
         finish(apply_init_inner(dir, &board, write))?;
         return Ok(outcomes);
@@ -914,6 +947,7 @@ fn attempt_run(
     };
     let mut after = before.clone();
     let outcomes = execute_batch(&mut after, cmds).map_err(command_error(0))?;
+    guard(Some(&before), &after).map_err(|reason| RunError::Refused { reason })?;
     between(());
     finish(apply_boards(dir, &before, &after, write))?;
     Ok(outcomes)

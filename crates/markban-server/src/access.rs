@@ -4,8 +4,10 @@
 //!
 //! ```text
 //! access.toml          users (see below)
+//! access.toml.lock     held while an admin command edits access.toml
 //! boards/<board-id>/   one ordinary markban board each
-//! log/<board-id>.jsonl append-only command log
+//! log/<board-id>.jsonl append-only command log (and one rotated `.jsonl.1`)
+//! removed/<id>-<time>/ boards taken out by `markban server board remove`
 //! ```
 //!
 //! `access.toml`:
@@ -19,14 +21,17 @@
 //!
 //! Tokens are 32 random bytes, shown once and stored only as their SHA-256. The admin functions
 //! here edit the file atomically (temporary file and rename, with a compare-and-swap against the
-//! bytes read) and keep comments and unknown keys.
+//! bytes read) under an exclusive lock on `access.toml.lock`, and keep comments and unknown keys.
+//! Directories are created private (0700) and files 0600 on Unix.
 
 use markban_core::board::BoardFile;
 use markban_core::command::Command;
 use markban_core::is_valid_id;
 use sha2::{Digest, Sha256};
+use std::fs::TryLockError;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use subtle::ConstantTimeEq;
 use toml_edit::{Array, DocumentMut, Item, Table, value};
 
@@ -36,6 +41,12 @@ pub const ACCESS_FILE: &str = "access.toml";
 pub const BOARDS_DIR: &str = "boards";
 /// The log directory inside the data directory.
 pub const LOG_DIR: &str = "log";
+/// Where removed boards go inside the data directory.
+pub const REMOVED_DIR: &str = "removed";
+/// The lock file held while `access.toml` is edited.
+pub const ACCESS_LOCK: &str = "access.toml.lock";
+const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCK_POLL: Duration = Duration::from_millis(50);
 /// "All boards" in a user's `boards` list.
 pub const ALL_BOARDS: &str = "*";
 const TOKEN_PREFIX: &str = "mb_";
@@ -101,6 +112,88 @@ pub fn hash_token(token: &str) -> String {
 
 fn access_path(data: &Path) -> PathBuf {
     data.join(ACCESS_FILE)
+}
+
+/// What identifies one version of `access.toml` cheaply: size, modification time and (on Unix)
+/// the inode, which every admin edit changes because it renames a new file into place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp {
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+    inode: u64,
+}
+
+/// The [`Stamp`] of `<data>/access.toml`.
+///
+/// # Errors
+/// When the file cannot be inspected.
+pub fn access_stamp(data: &Path) -> Result<Stamp, String> {
+    let meta = std::fs::metadata(access_path(data))
+        .map_err(|e| format!("cannot read {ACCESS_FILE}: {e}"))?;
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+    #[cfg(not(unix))]
+    let inode = 0;
+    Ok(Stamp {
+        len: meta.len(),
+        modified: meta.modified().ok(),
+        inode,
+    })
+}
+
+/// Creates `path` and missing parents, private to the owner (0700 on Unix).
+///
+/// # Errors
+/// The I/O failure.
+pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+/// Options that create a file private to the owner (0600 on Unix).
+#[must_use]
+pub fn private_file() -> std::fs::OpenOptions {
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+}
+
+/// Takes the exclusive lock on `<data>/access.toml.lock`, polling for up to 5 seconds. Held
+/// until the returned file is dropped. A filesystem without locks is not locked.
+fn lock_access(data: &Path) -> Result<std::fs::File, String> {
+    let path = data.join(ACCESS_LOCK);
+    let file = private_file()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .map_err(|e| format!("cannot open {ACCESS_LOCK}: {e}"))?;
+    let start = Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(file),
+            Err(TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => {
+                return Ok(file);
+            }
+            Err(TryLockError::Error(e)) => return Err(format!("cannot lock {ACCESS_LOCK}: {e}")),
+            Err(TryLockError::WouldBlock) if start.elapsed() >= LOCK_TIMEOUT => {
+                return Err(format!(
+                    "{ACCESS_FILE} is being edited by another markban admin command; try again shortly"
+                ));
+            }
+            Err(TryLockError::WouldBlock) => std::thread::sleep(LOCK_POLL),
+        }
+    }
 }
 
 fn read_doc(data: &Path) -> Result<(Vec<u8>, DocumentMut), String> {
@@ -225,6 +318,14 @@ pub fn log_path(data: &Path, id: &str) -> PathBuf {
     data.join(LOG_DIR).join(format!("{id}.jsonl"))
 }
 
+/// The rotated (previous) log file next to `log`: `<id>.jsonl.1`.
+#[must_use]
+pub fn rotated_log_path(log: &Path) -> PathBuf {
+    let mut name = log.as_os_str().to_os_string();
+    name.push(".1");
+    PathBuf::from(name)
+}
+
 fn new_token() -> Result<String, String> {
     let mut bytes = [0_u8; 32];
     getrandom::fill(&mut bytes).map_err(|e| format!("cannot get random bytes: {e}"))?;
@@ -237,17 +338,14 @@ fn new_token() -> Result<String, String> {
 fn write_access(data: &Path, expected: Option<&[u8]>, bytes: &[u8]) -> Result<(), String> {
     let path = access_path(data);
     let temp = data.join(format!(".{ACCESS_FILE}.tmp-{}", std::process::id()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let written = options.open(&temp).and_then(|mut file| {
-        file.write_all(bytes)?;
-        file.sync_all()
-    });
+    let written = private_file()
+        .write(true)
+        .create_new(true)
+        .open(&temp)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        });
     if let Err(e) = written {
         let _ = std::fs::remove_file(&temp);
         return Err(format!("cannot write {ACCESS_FILE}: {e}"));
@@ -269,8 +367,18 @@ fn write_access(data: &Path, expected: Option<&[u8]>, bytes: &[u8]) -> Result<()
     Ok(())
 }
 
-/// Reads the file, applies `edit` to the document and writes it back atomically.
+/// Reads the file, applies `edit` to the document and writes it back atomically, under the
+/// admin lock.
 fn edit_doc(
+    data: &Path,
+    edit: impl FnOnce(&mut DocumentMut) -> Result<(), String>,
+) -> Result<(), String> {
+    let _lock = lock_access(data)?;
+    edit_doc_locked(data, edit)
+}
+
+/// [`edit_doc`] for a caller that already holds the admin lock.
+fn edit_doc_locked(
     data: &Path,
     edit: impl FnOnce(&mut DocumentMut) -> Result<(), String>,
 ) -> Result<(), String> {
@@ -346,8 +454,15 @@ pub fn init(data: &Path, admin: &str) -> Result<String, String> {
         ));
     }
     for sub in [BOARDS_DIR, LOG_DIR] {
-        std::fs::create_dir_all(data.join(sub))
+        create_private_dir(&data.join(sub))
             .map_err(|e| format!("cannot create '{}': {e}", data.join(sub).display()))?;
+    }
+    let _lock = lock_access(data)?;
+    if access_path(data).exists() {
+        return Err(format!(
+            "'{}' already has an {ACCESS_FILE}; add users with `markban server user add`",
+            data.display()
+        ));
     }
     let token = new_token()?;
     let mut doc: DocumentMut = "# markban server: users, their token hashes and boards.\n# Edit with `markban server user ...`; tokens are stored only as SHA-256.\n"
@@ -423,6 +538,31 @@ pub fn set_boards(data: &Path, name: &str, boards: &[String]) -> Result<(), Stri
     })
 }
 
+/// Writes `token` and a newline to a new file at `path`, private to the owner (0600 on Unix).
+/// An existing file is never overwritten.
+///
+/// # Errors
+/// An existing file or an I/O failure; the message never contains the token.
+pub fn write_token_file(path: &Path, token: &str) -> Result<(), String> {
+    let mut file = private_file()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!(
+                    "'{}' already exists; give a new file for the token",
+                    path.display()
+                )
+            } else {
+                format!("cannot create '{}': {e}", path.display())
+            }
+        })?;
+    file.write_all(format!("{token}\n").as_bytes())
+        .and_then(|()| file.sync_all())
+        .map_err(|e| format!("cannot write '{}': {e}", path.display()))
+}
+
 /// Creates board `id` with `board.init`. Returns the board id.
 ///
 /// # Errors
@@ -456,6 +596,97 @@ pub fn add_board(data: &Path, id: &str, title: &str, columns: &[String]) -> Resu
     Ok(id.to_string())
 }
 
+/// Removes board `id`: drops it from every user's `boards` and moves its directory (and log) to
+/// `<data>/removed/<id>-<timestamp>/`. Nothing is deleted. Returns where the board went.
+///
+/// # Errors
+/// An unknown board or an I/O failure.
+pub fn remove_board(data: &Path, id: &str) -> Result<PathBuf, String> {
+    if !valid_name(id) {
+        return Err(format!(
+            "'{}' is not a valid board id; list the boards with `markban server board list`",
+            id.escape_debug()
+        ));
+    }
+    let _lock = lock_access(data)?;
+    let Some(dir) = board_dir(data, id) else {
+        return Err(format!(
+            "no board '{id}' in {BOARDS_DIR}/; list the boards with `markban server board list`"
+        ));
+    };
+    // Grants go first: should the move fail, the board stays but nobody new reaches it by id.
+    edit_doc_locked(data, |doc| {
+        for (_, user) in users_table(doc)?.iter_mut() {
+            let Some(user) = user.as_table_like_mut() else {
+                continue;
+            };
+            let Some(boards) = user.get("boards").and_then(Item::as_array) else {
+                continue;
+            };
+            let kept: Vec<String> = boards
+                .iter()
+                .filter_map(|b| b.as_str())
+                .filter(|b| *b != id)
+                .map(str::to_string)
+                .collect();
+            if kept.len() != boards.len() {
+                user.insert("boards", boards_array(&kept));
+            }
+        }
+        Ok(())
+    })?;
+    let removed = data.join(REMOVED_DIR);
+    create_private_dir(&removed)
+        .map_err(|e| format!("cannot create '{}': {e}", removed.display()))?;
+    let target = free_removed_path(&removed, id)?;
+    std::fs::rename(&dir, &target)
+        .map_err(|e| format!("cannot move board '{id}' to {REMOVED_DIR}/: {e}"))?;
+    let log = log_path(data, id);
+    for (from, to) in [
+        (log.clone(), target.join("log.jsonl")),
+        (rotated_log_path(&log), target.join("log.jsonl.1")),
+    ] {
+        match std::fs::rename(&from, &to) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(format!(
+                    "moved board '{id}' but cannot move its log: {e}; move {} by hand",
+                    from.display()
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(target)
+}
+
+/// `<removed>/<id>-<UTC time>`, with `-2`, `-3`... when that is taken.
+fn free_removed_path(removed: &Path, id: &str) -> Result<PathBuf, String> {
+    let now = time::OffsetDateTime::now_utc();
+    let stamp = format!(
+        "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second()
+    );
+    for n in 1..1000_u32 {
+        let name = if n == 1 {
+            format!("{id}-{stamp}")
+        } else {
+            format!("{id}-{stamp}-{n}")
+        };
+        let path = removed.join(name);
+        if std::fs::symlink_metadata(&path).is_err() {
+            return Ok(path);
+        }
+    }
+    Err(format!(
+        "too many removed copies of '{id}' this second in {REMOVED_DIR}/; try again"
+    ))
+}
+
 /// The title in `board.md` of a board directory; empty when it cannot be read.
 #[must_use]
 pub fn board_title(dir: &Path) -> String {
@@ -471,12 +702,15 @@ pub fn board_title(dir: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// Every board as `(id, title)`, sorted by id. Entries that are not valid ids or not real
-/// directories are skipped.
+/// Every board whose id `keep` accepts, as `(id, title)`, sorted by id. `board.md` is only read
+/// for kept ids. Entries that are not valid ids or not real directories are skipped.
 ///
 /// # Errors
 /// When `boards/` cannot be read.
-pub fn list_boards(data: &Path) -> Result<Vec<(String, String)>, String> {
+pub fn list_boards_where(
+    data: &Path,
+    keep: impl Fn(&str) -> bool,
+) -> Result<Vec<(String, String)>, String> {
     let boards = data.join(BOARDS_DIR);
     let entries = std::fs::read_dir(&boards).map_err(|e| {
         format!(
@@ -488,12 +722,24 @@ pub fn list_boards(data: &Path) -> Result<Vec<(String, String)>, String> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let id = entry.file_name().to_str()?.to_string();
+            if !keep(&id) {
+                return None;
+            }
             let dir = board_dir(data, &id)?;
             Some((id, board_title(&dir)))
         })
         .collect();
     out.sort();
     Ok(out)
+}
+
+/// Every board as `(id, title)`, sorted by id. Entries that are not valid ids or not real
+/// directories are skipped.
+///
+/// # Errors
+/// When `boards/` cannot be read.
+pub fn list_boards(data: &Path) -> Result<Vec<(String, String)>, String> {
+    list_boards_where(data, |_| true)
 }
 
 #[cfg(test)]

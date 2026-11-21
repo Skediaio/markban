@@ -17,20 +17,20 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn new() -> Self {
+        Self::with(|_| {})
+    }
+
+    /// A fixture whose server configuration is first changed by `tune`.
+    pub fn with(tune: impl FnOnce(&mut Config)) -> Self {
         let data = TempDir::new().unwrap();
         let admin = access::init(data.path(), "maarten").unwrap();
         for id in ["kuuno", "other"] {
             access::add_board(data.path(), id, &format!("Board {id}"), &cols()).unwrap();
         }
         let anna = access::add_user(data.path(), "anna", &["kuuno".to_string()], false).unwrap();
-        let addr = markban_server::spawn(
-            Config {
-                data: data.path().to_path_buf(),
-                allowed_hosts: Vec::new(),
-            },
-            "127.0.0.1:0",
-        )
-        .unwrap();
+        let mut config = Config::new(data.path().to_path_buf());
+        tune(&mut config);
+        let addr = markban_server::spawn(config, "127.0.0.1:0").unwrap();
         Self {
             data,
             addr,
@@ -156,4 +156,15 @@ pub fn board_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
         }
     }
     files
+}
+
+/// Sends `head` (a request without its blank line; `Host` and `Connection: close` are added)
+/// and reads the whole answer.
+pub fn raw(addr: SocketAddr, head: &str) -> Resp {
+    let mut stream = TcpStream::connect(addr).unwrap();
+    let text = format!("{head}Host: {addr}\r\nConnection: close\r\n\r\n");
+    stream.write_all(text.as_bytes()).unwrap();
+    let mut out = Vec::new();
+    let _ = stream.read_to_end(&mut out);
+    parse_response(&out)
 }

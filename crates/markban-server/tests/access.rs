@@ -214,3 +214,135 @@ fn board_add_and_list() {
     }
     assert!(!dir.path().join("x").exists());
 }
+
+#[test]
+fn concurrent_admin_commands_lose_no_edit() {
+    let dir = TempDir::new().unwrap();
+    access::init(dir.path(), "maarten").unwrap();
+    let per_thread = 12;
+    let tokens: Vec<Vec<String>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = ["a", "b"]
+            .into_iter()
+            .map(|who| {
+                let data = dir.path();
+                scope.spawn(move || {
+                    (0..per_thread)
+                        .map(|i| {
+                            access::add_user(data, &format!("{who}{i}"), &["*".into()], false)
+                                .unwrap_or_else(|e| panic!("{who}{i}: {e}"))
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let parsed = Access::load(dir.path()).unwrap();
+    for (who, tokens) in ["a", "b"].into_iter().zip(&tokens) {
+        for (i, token) in tokens.iter().enumerate() {
+            let user = parsed.authenticate(token);
+            assert_eq!(
+                user.map(|u| u.name.as_str()),
+                Some(format!("{who}{i}").as_str()),
+                "lost {who}{i}"
+            );
+        }
+    }
+    // The lock file is tool-owned and stays private.
+    assert!(dir.path().join("access.toml.lock").is_file());
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.contains(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn the_data_directory_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let parent = TempDir::new().unwrap();
+    let data = parent.path().join("data");
+    access::init(&data, "maarten").unwrap();
+    for sub in ["", "boards", "log"] {
+        let mode = std::fs::metadata(data.join(sub))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o700, "{sub:?}: mode {mode:o}");
+    }
+}
+
+#[test]
+fn board_remove_moves_the_board_and_its_log_and_drops_the_grants() {
+    let dir = TempDir::new().unwrap();
+    access::init(dir.path(), "maarten").unwrap();
+    for id in ["a", "b"] {
+        access::add_board(dir.path(), id, id, &cols()).unwrap();
+    }
+    let anna = access::add_user(dir.path(), "anna", &["a".into(), "b".into()], false).unwrap();
+    let bob = access::add_user(dir.path(), "bob", &["b".into()], false).unwrap();
+    std::fs::write(dir.path().join("log/b.jsonl"), "{}\n").unwrap();
+
+    let moved = access::remove_board(dir.path(), "b").unwrap();
+    assert!(!dir.path().join("boards/b").exists());
+    assert!(!dir.path().join("log/b.jsonl").exists());
+    assert_eq!(moved.parent().unwrap(), dir.path().join("removed"));
+    let name = moved.file_name().unwrap().to_string_lossy().into_owned();
+    assert!(name.starts_with("b-") && name.len() > 10, "{name}");
+    assert!(moved.join("board.md").is_file());
+    assert_eq!(
+        std::fs::read_to_string(moved.join("log.jsonl")).unwrap(),
+        "{}\n"
+    );
+
+    let parsed = Access::load(dir.path()).unwrap();
+    let a = parsed.authenticate(&anna).unwrap();
+    assert!(a.may_use("a") && !a.may_use("b"));
+    // Bob keeps his token but no board.
+    let b = parsed.authenticate(&bob).unwrap();
+    assert!(!b.may_use("b"));
+    // The admin with "*" keeps "*".
+    assert!(read_access(&dir).contains(r#"boards = ["*"]"#));
+
+    // A board of the same id later is a new board without the old grants.
+    access::add_board(dir.path(), "b", "New b", &cols()).unwrap();
+    let parsed = Access::load(dir.path()).unwrap();
+    assert!(!parsed.authenticate(&bob).unwrap().may_use("b"));
+
+    // Removing twice moves to a distinct place; an unknown board is an error.
+    let again = access::remove_board(dir.path(), "b").unwrap();
+    assert_ne!(again, moved);
+    for bad in ["b", "ghost", "../a", ""] {
+        let err = access::remove_board(dir.path(), bad).unwrap_err();
+        assert!(!err.contains('\n'), "{err}");
+    }
+    assert!(dir.path().join("boards/a/board.md").is_file());
+}
+
+#[test]
+fn a_token_can_be_written_to_a_new_private_file() {
+    let parent = TempDir::new().unwrap();
+    let data = parent.path().join("data");
+    let file = parent.path().join("admin.token");
+    let token = access::init(&data, "maarten").unwrap();
+    access::write_token_file(&file, &token).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("{token}\n")
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    let err = access::write_token_file(&file, "mb_other").unwrap_err();
+    assert!(err.contains("exists"), "{err}");
+    assert!(!err.contains("mb_other"));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap(),
+        format!("{token}\n")
+    );
+}

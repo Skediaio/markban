@@ -182,3 +182,63 @@ fn run_gives_up_after_three_conflicts_with_one_line() {
     assert!(matches!(err, RunError::Contended { .. }), "{err:?}");
     assert!(!err.to_string().contains('\n'));
 }
+
+// ---- run_guarded ----
+
+fn snapshot(dir: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = vec![(
+        "board.md".to_string(),
+        std::fs::read(dir.join("board.md")).unwrap(),
+    )];
+    let mut cards: Vec<_> = std::fs::read_dir(dir.join("cards"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    cards.sort();
+    for card in cards {
+        let name = card.file_name().unwrap().to_string_lossy().into_owned();
+        files.push((name, std::fs::read(&card).unwrap()));
+    }
+    files
+}
+
+#[test]
+fn run_guarded_sees_before_and_after_and_a_refusal_writes_nothing() {
+    let dir = temp_board();
+    let before = snapshot(dir.path());
+    let seen = std::cell::Cell::new(None);
+    let guard = |old: Option<&markban_core::board::Board>, new: &markban_core::board::Board| {
+        seen.set(Some((old.map(|b| b.cards.len()), new.cards.len())));
+        Err::<(), String>("too many cards on this server".to_string())
+    };
+    let err = fs::run_guarded(
+        dir.path(),
+        &[cmd(r#"{"cmd":"card.add","title":"New one"}"#)],
+        &guard,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, RunError::Refused { reason } if reason == "too many cards on this server"),
+        "{err:?}"
+    );
+    assert_eq!(err.exit_code(), fs::EXIT_INVALID);
+    assert_eq!(err.to_string(), "too many cards on this server");
+    let (old, new) = seen.get().unwrap();
+    assert_eq!(new, old.unwrap() + 1);
+    assert_eq!(snapshot(dir.path()), before, "a refused run writes nothing");
+    no_temp_files(dir.path());
+}
+
+#[test]
+fn run_guarded_applies_when_the_guard_agrees() {
+    let dir = temp_board();
+    let ok = |_: Option<&markban_core::board::Board>, _: &markban_core::board::Board| Ok(());
+    let outcomes = fs::run_guarded(
+        dir.path(),
+        &[cmd(r#"{"cmd":"card.add","title":"New one"}"#)],
+        &ok,
+    )
+    .unwrap();
+    assert_eq!(outcomes[0].id, "new-one");
+    assert!(dir.path().join("cards/new-one.md").is_file());
+}

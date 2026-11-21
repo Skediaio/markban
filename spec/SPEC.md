@@ -221,12 +221,17 @@ the server runs every change as a command, one at a time per board, with the sam
 **Data directory** (`markban serve --data <DIR>`, default `$MARKBAN_DATA`, else the current directory):
 
 ```
-access.toml          users, their token hashes and boards
-boards/<board-id>/   one ordinary board each (sections 1 to 8 apply unchanged)
-log/<board-id>.jsonl append-only log, outside the board so it never shows up as a card
+access.toml           users, their token hashes and boards
+access.toml.lock      held while an admin command edits access.toml
+boards/<board-id>/    one ordinary board each (sections 1 to 8 apply unchanged)
+log/<board-id>.jsonl  append-only log, outside the board so it never shows up as a card
+log/<board-id>.jsonl.1  the previous log, after one rotation
+removed/<id>-<time>/  boards taken out by `markban server board remove`
 ```
 
 A board id is `[a-z0-9]+(-[a-z0-9]+)*`, at most 64 characters. A symbolic link in `boards/` is not a board.
+On Unix the tools create the data directory, `boards/`, `log/` and `removed/` with mode 0700 and
+`access.toml`, its lock file and the log files with mode 0600.
 
 **Access.** `access.toml` lists users:
 
@@ -241,30 +246,41 @@ boards = ["kuuno"]
 ```
 
 A token is 32 random bytes (`mb_` and 64 hex digits), shown once and stored only as its SHA-256; hashes are
-compared in constant time. The server reads `access.toml` on every request, so changes apply at once; a file it
-cannot parse refuses every request. A board the user may not use answers exactly like a board that does not
-exist.
+compared in constant time. The server parses `access.toml` again whenever its size, modification time or inode
+changes, so changes apply at once; a file it cannot parse refuses every request (fail closed, also after an
+earlier good read). A board the user may not use answers exactly like a board that does not exist. A grant
+names a board id, not a board: `*`, or an id written into `access.toml` by hand before that board exists,
+reaches the board as soon as it is created.
 
 **Administration** runs on the server with direct file access, never over HTTP:
 
 ```
-markban server init <DIR> [--admin NAME]          # layout plus a first user with "*"; prints its token
-markban server user add <name> --boards a,b [--admin]   # prints the new token once
+markban server init <DIR> [--admin NAME] [--token-file PATH]   # layout plus a first user with "*"
+markban server user add <name> --boards a,b [--admin] [--token-file PATH]
 markban server user remove <name>
 markban server user boards <name> a,b             # or * for all boards
 markban server board add <id> "Title" COL...      # board.init in boards/<id>
 markban server board list
+markban server board remove <id>                  # move to removed/<id>-<UTC time>/, drop every grant
 ```
 
 The `server` commands take `--data <DIR>` (default `$MARKBAN_DATA`, else the current directory) and edit
-`access.toml` atomically, keeping comments and unknown keys.
+`access.toml` atomically under an exclusive lock on `access.toml.lock` (waiting up to 5 seconds for another
+admin command), keeping comments and unknown keys. A new token goes to stdout, or with `--token-file` into a
+new file with mode 0600 (an existing file is refused before anything changes), so it never reaches a
+container or terminal log. `board remove` never deletes: the board directory and its log move to `removed/`,
+and the id is dropped from every user's `boards` (`*` stays); a later board with the same id starts without
+the old grants.
 
-**API.** Every request needs `Authorization: Bearer <token>`; a missing or wrong token is 401. The server binds
-`127.0.0.1:7171` by default (`--listen`) and answers 403 to a `Host` header that is not loopback or listed in
-`MARKBAN_ALLOWED_HOSTS` (comma separated; set it behind a reverse proxy, which also terminates TLS).
+**API.** Every `/api/` request needs `Authorization: Bearer <token>`; a missing or wrong token is 401. The
+token is checked from the headers alone, before the request body is read. The server binds `127.0.0.1:7171`
+by default (`--listen`). Without `MARKBAN_ALLOWED_HOSTS` it answers 403 to a `Host` header that is not
+loopback; with `MARKBAN_ALLOWED_HOSTS` (comma separated host names or `name:port`) it serves only the listed
+hosts, loopback included only when listed.
 
 | Request | Answer |
 |---|---|
+| `GET /healthz` | `ok` (200), without a token, the `Host` check or the request limit; reveals nothing else |
 | `GET /api/boards` | `[{"id","title"}]`, the boards the token may use |
 | `GET /api/boards/<id>` | the board view, as `markban ls --json` |
 | `GET /api/boards/<id>/cards/<card>` | the card, as `markban show --json` |
@@ -272,10 +288,38 @@ The `server` commands take `--data <DIR>` (default `$MARKBAN_DATA`, else the cur
 | `GET /api/boards/<id>/log?limit=N` | the last N log entries (default 50, at most 1000), newest last |
 
 An error is `{"error": "<one line>", "code": <exit code>, "index": <failing command>?}` with HTTP status 400
-(code 1), 409 (code 3), 500 (code 4 or a server fault), 401, 404 (unknown board, card or endpoint) or 413. A
-request body may hold at most 1 MiB and 1000 commands.
+(code 1), 409 (code 3), 500 (code 4 or a server fault), 503 (busy or timed out), 401, 403, 404 (unknown board,
+card or endpoint) or 413. A request body may hold at most 1 MiB and 1000 commands.
 
-**Log.** Each successful command appends one line: `{"ts":"<RFC 3339 UTC>","user":"<name>","cmd":{…},"outcome":"<id>"}`.
+**Limits.** Each is configurable on `markban serve`; a run that breaks a board limit writes nothing and is
+refused with code 1 and one line.
+
+| Limit | Default | Flag | Past it |
+|---|---|---|---|
+| cards per board after a run | 5000 | `--max-cards` | 400, code 1 (a board may always shrink) |
+| bytes per card file a run writes | 256 KiB | `--max-card-bytes` | 400, code 1 |
+| requests in flight | 64 | `--max-requests` | 503, code 3, at once |
+| time per request, body included | 30 s | `--request-timeout` | 503; code 3 for a read, code 4 for a write (it may still have been applied: check the log) |
+| time to send the request headers, and keep-alive idle time | 10 s | | connection closed |
+| open connections | 256 | | wait in the listen queue |
+| blocking file-system jobs, over all boards | 16 | | wait |
+
+Runs on one board wait for each other without holding a file-system thread, so a busy board never stalls the
+others.
+
+**Log.** After a successful run each command appends one line: `{"ts":"<RFC 3339 UTC>","user":"<name>",
+"cmd":{…},"outcome":"<id>"}`. After a partially applied run (code 4) each command appends
+`"outcome":"partial"` with `"written":[<paths>]`. Text fields longer than 2 KiB are cut to their first 2 KiB
+plus `…(truncated, N bytes)`: the log is an audit trail, not a copy of the board. When the board changed but
+the line could not be written, the answer is still a success with `"log":"failed"` (the CLI warns on stderr)
+and the server writes the reason to its stderr. At 16 MiB the log is renamed to `<id>.jsonl.1` (replacing an
+older one) and a new one starts; `GET …/log` reads both from the end, never the whole file. Only changes through
+the API are logged: the local CLI writing `boards/<id>` on the server directly bypasses the log.
+
+**Reverse proxy.** Run the server on loopback (or an internal network) behind an HTTPS reverse proxy, and
+set `MARKBAN_ALLOWED_HOSTS` to the public host name the proxy forwards. The proxy must still provide TLS, rate
+limiting and per-client connection limits, and limits on slow clients beyond the header and request timeouts
+above; the server has no notion of client addresses.
 
 **CLI remote mode.** With `MARKBAN_URL` (or `--url`) set, every board command (`ls`, `show`, `add`, `mv`,
 `edit`, `rm`, `col`, `init`, `run`, `check`) sends the same commands to the server and prints the same output
@@ -283,6 +327,12 @@ with the same exit codes as locally. The token comes from `MARKBAN_TOKEN` (`--to
 process list); the board from `-b <id>` or `MARKBAN_BOARD`, which is a board id in remote mode and a
 directory locally. `-C` is refused in remote mode. Two commands only work remotely: `markban boards [--json]`
 and `markban log [-n N]` (JSON lines). A network failure is one line with exit code 1.
+
+The CLI refuses a URL with a user name or password (without echoing it), and plain `http://` to a host that is
+not loopback (`localhost`, `127.0.0.0/8`, `[::1]`), because the token would cross the network in clear;
+`--allow-insecure-http` or `MARKBAN_ALLOW_INSECURE_HTTP=1` lifts that on a trusted network. Loopback `http://`
+never goes through a proxy; any other URL honours `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` from
+the environment, so a proxy set there sees the server's host name (for `https://`, not the token).
 
 ## Reserved for later versions
 

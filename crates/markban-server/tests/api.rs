@@ -102,6 +102,8 @@ fn removed_user_is_locked_out_without_a_restart() {
 #[test]
 fn unreadable_access_file_fails_closed() {
     let f = Fixture::new();
+    // Warm any cache first: a later parse error must still refuse.
+    assert_eq!(f.get("/api/boards/kuuno", Some(&f.admin)).status, 200);
     std::fs::write(f.data.path().join("access.toml"), "garbage [[[").unwrap();
     let r = f.get("/api/boards/kuuno", Some(&f.admin));
     assert_eq!(r.status, 500, "{}", r.body);
@@ -163,6 +165,20 @@ fn star_reaches_every_board_including_new_ones() {
     // anna's list does not grow.
     assert!(!f.get("/api/boards", Some(&f.anna)).body.contains("later"));
     assert_eq!(f.get("/api/boards/later", Some(&f.anna)).status, 404);
+}
+
+#[test]
+fn an_access_change_of_the_same_size_takes_effect_immediately() {
+    let f = Fixture::new();
+    access::add_board(f.data.path(), "aaaaa", "A", &common::cols()).unwrap();
+    assert_eq!(f.get("/api/boards/kuuno", Some(&f.anna)).status, 200);
+    let before = std::fs::read(f.data.path().join("access.toml")).unwrap();
+    // `kuuno` and `aaaaa` have the same length, so the file keeps its size.
+    access::set_boards(f.data.path(), "anna", &["aaaaa".into()]).unwrap();
+    let after = std::fs::read(f.data.path().join("access.toml")).unwrap();
+    assert_eq!(before.len(), after.len());
+    assert_eq!(f.get("/api/boards/kuuno", Some(&f.anna)).status, 404);
+    assert_eq!(f.get("/api/boards/aaaaa", Some(&f.anna)).status, 200);
 }
 
 #[test]
@@ -251,14 +267,9 @@ fn unknown_host_header_is_refused() {
 fn allowed_hosts_are_configurable() {
     let data = tempfile::TempDir::new().unwrap();
     let token = access::init(data.path(), "maarten").unwrap();
-    let addr = markban_server::spawn(
-        markban_server::Config {
-            data: data.path().to_path_buf(),
-            allowed_hosts: markban_server::parse_hosts("board.example"),
-        },
-        "127.0.0.1:0",
-    )
-    .unwrap();
+    let mut config = markban_server::Config::new(data.path().to_path_buf());
+    config.allowed_hosts = markban_server::parse_hosts("board.example");
+    let addr = markban_server::spawn(config, "127.0.0.1:0").unwrap();
     let r = request(
         addr,
         "GET",
@@ -277,6 +288,18 @@ fn allowed_hosts_are_configurable() {
         Some("evil.example"),
     );
     assert_eq!(r.status, 403);
+    // A configured list replaces loopback: only the listed names are served.
+    for loopback in ["localhost", "127.0.0.1", "[::1]:7171"] {
+        let r = request(
+            addr,
+            "GET",
+            "/api/boards",
+            Some(&token),
+            None,
+            Some(loopback),
+        );
+        assert_eq!(r.status, 403, "{loopback}: {}", r.body);
+    }
 }
 
 // ---- reading ----
@@ -583,7 +606,7 @@ fn adversarial_commands_never_kill_the_server() {
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     top.sort();
-    assert_eq!(top, ["access.toml", "boards", "log"]);
+    assert_eq!(top, ["access.toml", "access.toml.lock", "boards", "log"]);
 }
 
 #[test]

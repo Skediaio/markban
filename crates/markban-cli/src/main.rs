@@ -148,6 +148,7 @@ fn target(
     url: Option<String>,
     token: Option<String>,
     board: Option<String>,
+    allow_insecure_http: bool,
 ) -> Result<Target, Fail> {
     let Some(url) = url.or_else(|| env_var("MARKBAN_URL")) else {
         if board.is_some() {
@@ -169,7 +170,9 @@ fn target(
         )
     })?;
     let board = board.or_else(|| env_var("MARKBAN_BOARD"));
-    Ok(Target::Remote(Remote::new(&url, token, board)?))
+    let insecure =
+        allow_insecure_http || env_var("MARKBAN_ALLOW_INSECURE_HTTP").as_deref() == Some("1");
+    Ok(Target::Remote(Remote::new(&url, token, board, insecure)?))
 }
 
 /// The message for a refused command: `line N:` in front when it came from a script.
@@ -266,13 +269,23 @@ impl Target {
 
 fn dispatch(cli: Cli) -> Result<ExitCode, Fail> {
     match cli.command {
-        Cmd::Serve { data, listen } => {
-            let config = markban_server::Config {
-                data: data_dir(data)?,
-                allowed_hosts: markban_server::parse_hosts(
-                    &std::env::var("MARKBAN_ALLOWED_HOSTS").unwrap_or_default(),
-                ),
-            };
+        Cmd::Serve {
+            data,
+            listen,
+            max_cards,
+            max_card_bytes,
+            max_requests,
+            request_timeout,
+        } => {
+            let mut config = markban_server::Config::new(data_dir(data)?);
+            config.allowed_hosts = markban_server::parse_hosts(
+                &std::env::var("MARKBAN_ALLOWED_HOSTS").unwrap_or_default(),
+            );
+            let limits = &mut config.limits;
+            limits.max_cards = max_cards;
+            limits.max_card_bytes = max_card_bytes;
+            limits.max_concurrent = max_requests;
+            limits.request_timeout = std::time::Duration::from_secs(request_timeout.max(1));
             markban_server::serve(config, &listen)?;
             Ok(ExitCode::SUCCESS)
         }
@@ -281,7 +294,13 @@ fn dispatch(cli: Cli) -> Result<ExitCode, Fail> {
             Ok(ExitCode::SUCCESS)
         }
         command => {
-            let target = target(cli.dir, cli.url, cli.token, cli.board)?;
+            let target = target(
+                cli.dir,
+                cli.url,
+                cli.token,
+                cli.board,
+                cli.allow_insecure_http,
+            )?;
             board_command(&target, command)
         }
     }
@@ -583,20 +602,54 @@ fn print_token(user: &str, token: &str) {
     );
 }
 
+/// Refuses an existing `--token-file` before anything changes (writing it later also refuses).
+fn check_token_file(file: Option<&Path>) -> Result<(), Fail> {
+    match file {
+        Some(file) if std::fs::symlink_metadata(file).is_ok() => Err(Fail::from(format!(
+            "'{}' already exists; give a new file for the token",
+            file.display()
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Hands a new token over: into a new private file with `--token-file`, else on stdout.
+fn deliver_token(user: &str, token: &str, file: Option<&Path>) -> Result<(), Fail> {
+    match file {
+        Some(file) => {
+            access::write_token_file(file, token)?;
+            let _ = writeln!(
+                std::io::stderr(),
+                "token for user '{user}' written to '{}'",
+                file.display()
+            );
+        }
+        None => print_token(user, token),
+    }
+    Ok(())
+}
+
 /// The admin commands: direct file access to a data directory, never HTTP.
 fn server_admin(data: Option<PathBuf>, command: ServerCmd) -> Result<(), Fail> {
     match command {
-        ServerCmd::Init { dir, admin } => {
+        ServerCmd::Init {
+            dir,
+            admin,
+            token_file,
+        } => {
+            check_token_file(token_file.as_deref())?;
             let token = access::init(&dir, &admin)?;
-            print_token(&admin, &token);
+            deliver_token(&admin, &token, token_file.as_deref())?;
         }
         ServerCmd::User(UserCmd::Add {
             name,
             boards,
             admin,
+            token_file,
         }) => {
+            check_token_file(token_file.as_deref())?;
             let token = access::add_user(&data_dir(data)?, &name, &boards, admin)?;
-            print_token(&name, &token);
+            deliver_token(&name, &token, token_file.as_deref())?;
         }
         ServerCmd::User(UserCmd::Remove { name }) => {
             access::remove_user(&data_dir(data)?, &name)?;
@@ -609,6 +662,15 @@ fn server_admin(data: Option<PathBuf>, command: ServerCmd) -> Result<(), Fail> {
         ServerCmd::Board(BoardCmd::Add { id, title, columns }) => {
             let id = access::add_board(&data_dir(data)?, &id, &title, &columns)?;
             emit(&format!("{id}\n"));
+        }
+        ServerCmd::Board(BoardCmd::Remove { id }) => {
+            let moved = access::remove_board(&data_dir(data)?, &id)?;
+            emit(&format!("{id}\n"));
+            let _ = writeln!(
+                std::io::stderr(),
+                "board '{id}' moved to '{}'",
+                moved.display()
+            );
         }
         ServerCmd::Board(BoardCmd::List) => {
             emit(&board_lines(access::list_boards(&data_dir(data)?)?));

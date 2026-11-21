@@ -4,6 +4,19 @@ Decisions taken, newest first, each with its reason. Open decisions at the botto
 
 ## Taken
 
+### 2026-11-21: The server has fixed resource limits and a bounded, clipped log
+
+A security review found that one client could exhaust the server: an unbounded log read whole on every
+`GET /log`, bodies read before authentication, waiting runs holding blocking threads, and boards without size
+limits. The server now authenticates from the headers before the body, admits at most 64 requests at once
+(503 beyond, at once rather than queued, so clients back off) with a 30 s request and 10 s header timeout,
+waits for a board on the async side, and refuses runs past 5000 cards per board or 256 KiB per card file
+(checked by `fs::run_guarded` before anything is written). All limits are flags with these defaults. The log
+is an audit trail, not a backup: text fields over 2 KiB are clipped, the file rotates at 16 MiB keeping one
+previous file, and reads go backwards from the end. Partial runs are logged too; a failed log write still
+answers success with `"log":"failed"`, because the board has changed and a retry would apply twice. Removing a
+board moves it to `removed/` instead of deleting it. `GET /healthz` is unauthenticated for health checks.
+
 ### 2026-11-21: The server API lives in its own crate, `markban-server`, served by `markban serve`
 
 The API is a small axum router in `markban-server` (the axum 0.8 that Dioxus fullstack already pulls in), and

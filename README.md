@@ -71,7 +71,12 @@ markban add "Draft the landing page" -c Doing
 markban log -n 5
 ```
 
-See [`spec/SPEC.md`](spec/SPEC.md) section 9 for the data layout, the HTTP API and access rules.
+Behind a reverse proxy, keep `serve` on loopback, terminate TLS in the proxy and set
+`MARKBAN_ALLOWED_HOSTS` to its host name; `--token-file` writes a new token to a 0600 file instead of stdout.
+The CLI refuses plain `http://` to a non-loopback host unless `--allow-insecure-http`. The server limits
+cards per board, card size, requests in flight and request time (flags on `serve`); `GET /healthz` answers `ok`.
+
+See [`spec/SPEC.md`](spec/SPEC.md) section 9 for the data layout, the HTTP API, limits, the log and access rules.
 
 ## Planned layout
 

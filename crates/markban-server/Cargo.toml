@@ -9,7 +9,9 @@ description = "The markban server: several boards, tokens with board access, a c
 [dependencies]
 markban-core = { path = "../markban-core" }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1", "query"] }
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "sync", "time"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "service", "http1"] }
 serde.workspace = true
 serde_json = "1"
 sha2 = "0.10"

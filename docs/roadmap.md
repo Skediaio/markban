@@ -19,7 +19,7 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 | # | Milestone | Status |
 |---|---|---|
 | 7 | Plugins: `@markban/core` (WASM), `remark-markban` | In progress |
-| 8 | Server: `markban serve`, several boards, tokens with board access, command API, log; CLI remote mode | Done 2026-11-21 |
+| 8 | Server: `markban serve`, several boards, tokens with board access, command API, log; CLI remote mode | Done 2026-11-21; security hardening (limits, log rotation, auth before body, `board remove`, `/healthz`, `--token-file`) done 2026-11-21 |
 | 9 | Viewer: board list, login, editing in the browser (move, add, edit) | Open |
 | 10 | `@markban/svelte`, Vite plugin, SvelteKit + mdsvex example | Done 2026-11-21 (live reload of the dev server not yet checked in a real browser) |
 | 11 | Agent skill for local and server mode | Open |
@@ -32,8 +32,8 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 - Viewer: render task-list items as checkboxes; show the column name instead of its id in the card detail.
 - Independent review of iteration 1.
 - Server: token rotation (`server user token <name>`); HTTP admin endpoints for the `admin` flag (milestone 9);
-  reading the log from its end instead of the whole file; request timeouts and rate limits (today: leave them
-  to the reverse proxy).
+  rate limits and per-client connection limits (left to the reverse proxy); a container image and deployment
+  guide (deferred until the server is deployed).
 
 ## Out of scope for iteration 1
 
