@@ -10,7 +10,7 @@ use crate::id::{MAX_ID_LEN, is_valid_id, slug};
 use crate::order::{self, Decimal, OrderError};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 fn is_false(value: &bool) -> bool {
@@ -142,8 +142,8 @@ pub enum CommandError {
         "column '{column}' still has {count} card(s); move or remove them first, or pass `move_to` with another column"
     )]
     ColumnInUse { column: String, count: usize },
-    #[error("card '{0}' has no readable frontmatter; fix the file by hand first")]
-    CardBroken(String),
+    #[error("card '{id}' has no valid frontmatter (E006); fix the file by hand first")]
+    CardBroken { id: String },
     #[error("board.init needs a directory without board.md; this board already exists")]
     AlreadyInitialised,
     #[error(transparent)]
@@ -215,12 +215,19 @@ fn position(
 /// error diagnostic that the board did not have before is refused with
 /// [`CommandError::WouldInvalidate`].
 pub fn execute(board: &mut Board, cmd: &Command) -> Result<Outcome, CommandError> {
-    let known = error_keys(&check(board));
+    let mut known = error_counts(&check(board));
     let mut work = board.clone();
     let outcome = apply_command(&mut work, cmd)?;
     let fresh: Vec<Diagnostic> = check(&work)
         .into_iter()
-        .filter(|d| d.severity == Severity::Error && !known.contains(&diagnostic_key(d)))
+        .filter(|d| d.severity == Severity::Error)
+        .filter(|d| match known.get_mut(&diagnostic_key(d)) {
+            Some(left) if *left > 0 => {
+                *left -= 1;
+                false
+            }
+            _ => true,
+        })
         .collect();
     if !fresh.is_empty() {
         return Err(CommandError::WouldInvalidate(fresh));
@@ -246,16 +253,19 @@ pub fn execute_batch(
     Ok(outcomes)
 }
 
-fn diagnostic_key(d: &Diagnostic) -> (String, String, String) {
-    (d.code.to_string(), d.file.clone(), d.message.clone())
+/// Identity of a diagnostic for the "no new errors" guard: code and file, without the message
+/// (which can embed lists that change, such as the columns in E007) or the line.
+fn diagnostic_key(d: &Diagnostic) -> (String, String) {
+    (d.code.to_string(), d.file.clone())
 }
 
-fn error_keys(diagnostics: &[Diagnostic]) -> BTreeSet<(String, String, String)> {
-    diagnostics
-        .iter()
-        .filter(|d| d.severity == Severity::Error)
-        .map(diagnostic_key)
-        .collect()
+/// How many error diagnostics each (code, file) has.
+fn error_counts(diagnostics: &[Diagnostic]) -> BTreeMap<(String, String), usize> {
+    let mut counts = BTreeMap::new();
+    for d in diagnostics.iter().filter(|d| d.severity == Severity::Error) {
+        *counts.entry(diagnostic_key(d)).or_insert(0) += 1;
+    }
+    counts
 }
 
 fn apply_command(board: &mut Board, cmd: &Command) -> Result<Outcome, CommandError> {
@@ -476,20 +486,23 @@ fn column_cards(
     cards
 }
 
-/// The order for `subject` at `pos` in `column`. Never touches other cards.
+/// The order for `subject` at `pos` in `column`, `None` for "no `order` key": the end of a
+/// column that has cards without a valid `order`, which sort after every ordered card.
+/// Never touches other cards.
 fn allocate(
     board: &Board,
     column: &str,
     subject: &str,
     pos: &Position,
-) -> Result<Decimal, CommandError> {
+) -> Result<Option<Decimal>, CommandError> {
     let cards = column_cards(board, column, Some(subject));
     let mut ordered = cards.iter().filter_map(|c| c.1.as_ref());
     let anchor = match pos {
+        Position::End if cards.iter().any(|c| c.1.is_none()) => return Ok(None),
         Position::End => {
-            return Ok(order::end(subject, ordered.next_back())?);
+            return Ok(Some(order::end(subject, ordered.next_back())?));
         }
-        Position::Top => return Ok(order::top(subject, ordered.next())?),
+        Position::Top => return Ok(Some(order::top(subject, ordered.next())?)),
         Position::Before(a) | Position::After(a) => a,
     };
     if anchor == subject {
@@ -511,7 +524,7 @@ fn allocate(
         .ok_or_else(|| CommandError::AnchorUnordered(anchor.clone()))?;
     let neighbour =
         |index: Option<usize>| index.and_then(|i| cards.get(i)).and_then(|c| c.1.as_ref());
-    Ok(match pos {
+    Ok(Some(match pos {
         Position::Before(_) => match neighbour(at.checked_sub(1)) {
             Some(prev) => order::between(subject, prev, anchor_order)?,
             None => order::top(subject, Some(anchor_order))?,
@@ -520,14 +533,14 @@ fn allocate(
             Some(next) => order::between(subject, anchor_order, next)?,
             None => order::end(subject, Some(anchor_order))?,
         },
-    })
+    }))
 }
 
 fn broken(card: &mut CardFile) -> Result<&mut crate::frontmatter::Frontmatter, CommandError> {
     let id = card.id.clone();
     card.frontmatter
         .as_mut()
-        .ok_or(CommandError::CardBroken(id))
+        .ok_or(CommandError::CardBroken { id })
 }
 
 fn set(card: &mut CardFile, key: &str, value: &str) -> Result<(), CommandError> {
@@ -536,12 +549,30 @@ fn set(card: &mut CardFile, key: &str, value: &str) -> Result<(), CommandError> 
         .map_err(|e| CommandError::Invalid(e.to_string()))
 }
 
-fn body_of(text: &str) -> String {
-    let text = text.trim_end_matches(['\n', '\r']);
+/// Writes `order`, or removes the key when there is none.
+fn set_order(card: &mut CardFile, order: Option<&Decimal>) -> Result<(), CommandError> {
+    match order {
+        Some(order) => set(card, "order", &order.to_string()),
+        None => {
+            broken(card)?.remove("order");
+            Ok(())
+        }
+    }
+}
+
+/// `text` with every line break turned into `eol`, without trailing line breaks.
+fn with_eol(text: &str, eol: &str) -> String {
+    text.trim_end_matches(['\n', '\r'])
+        .replace("\r\n", "\n")
+        .replace('\n', eol)
+}
+
+fn body_of(text: &str, eol: &str) -> String {
+    let text = with_eol(text, eol);
     if text.is_empty() {
         String::new()
     } else {
-        format!("\n{text}\n")
+        format!("{eol}{text}{eol}")
     }
 }
 
@@ -585,8 +616,8 @@ fn card_add(
     let mut card = CardFile::parse(&id, "---\n---\n");
     set(&mut card, "title", title)?;
     set(&mut card, "column", &column)?;
-    set(&mut card, "order", &order.to_string())?;
-    card.body = body_of(description.unwrap_or(""));
+    set_order(&mut card, order.as_ref())?;
+    card.body = body_of(description.unwrap_or(""), "\n");
     board.cards.insert(id.clone(), card);
     Ok(id)
 }
@@ -602,7 +633,7 @@ fn card_move(
         .get(id)
         .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
     if card.frontmatter.is_none() {
-        return Err(CommandError::CardBroken(id.to_string()));
+        return Err(CommandError::CardBroken { id: id.to_string() });
     }
     let current = card_column(card);
     if column.is_none() && pos.is_none() {
@@ -624,7 +655,7 @@ fn card_move(
     if current.as_deref() != Some(target.as_str()) {
         set(card, "column", &target)?;
     }
-    set(card, "order", &order.to_string())
+    set_order(card, order.as_ref())
 }
 
 fn card_edit(
@@ -646,22 +677,23 @@ fn card_edit(
         .cards
         .get_mut(id)
         .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
+    let eol = broken(card)?.dominant_eol();
     if let Some(title) = title {
         set(card, "title", title)?;
     }
     if let Some(description) = description {
-        card.body = body_of(description);
+        card.body = body_of(description, eol);
     }
     if let Some(line) = append {
-        let line = line.trim_end_matches(['\n', '\r']);
+        let line = with_eol(line, eol);
         if card.body.trim().is_empty() {
-            card.body = format!("\n{line}\n");
+            card.body = format!("{eol}{line}{eol}");
         } else {
             if !card.body.ends_with('\n') {
-                card.body.push('\n');
+                card.body.push_str(eol);
             }
-            card.body.push_str(line);
-            card.body.push('\n');
+            card.body.push_str(&line);
+            card.body.push_str(eol);
         }
     }
     Ok(())

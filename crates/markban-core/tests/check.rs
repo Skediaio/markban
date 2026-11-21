@@ -133,3 +133,15 @@ fn other_rules() {
     );
     assert!(codes.contains(&"E009") && codes.contains(&"E008") && codes.contains(&"E007"));
 }
+
+#[test]
+fn empty_order_counts_as_missing() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    let cards = vec![(
+        "c.md".to_string(),
+        b"---\ntitle: C\ncolumn: a\norder:\n---\n".to_vec(),
+    )];
+    let (b, _) = Board::parse(board, cards, vec![]);
+    let diags = markban_core::check(&b.unwrap());
+    assert!(diags.is_empty(), "{diags:?}");
+}

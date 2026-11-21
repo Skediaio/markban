@@ -45,7 +45,11 @@ pub struct CardDetail {
 #[must_use]
 pub fn card(board: &Board, id: &str) -> Option<CardDetail> {
     let card = board.cards.get(id)?;
-    let body = card.body.strip_prefix('\n').unwrap_or(&card.body);
+    let body = card
+        .body
+        .strip_prefix("\r\n")
+        .or_else(|| card.body.strip_prefix('\n'))
+        .unwrap_or(&card.body);
     Some(CardDetail {
         id: id.to_string(),
         title: text(card, "title").unwrap_or_else(|| id.to_string()),

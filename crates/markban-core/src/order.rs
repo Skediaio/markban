@@ -8,6 +8,8 @@ use thiserror::Error;
 const SCALE: u32 = 6;
 /// One whole unit in scaled integers (`10^SCALE`).
 const UNIT: i128 = 1_000_000;
+/// Most decimals an allocated order may have.
+const MAX_SCALE: u32 = 18;
 /// Longest integer part (in digits) that still fits scaled arithmetic.
 const MAX_INT_DIGITS: usize = 30;
 
@@ -94,7 +96,16 @@ impl Decimal {
     /// The value in millionths, or `None` when it has more than 6 decimals or is too large.
     #[must_use]
     pub fn to_scaled(&self) -> Option<i128> {
-        if self.frac.len() > SCALE as usize || self.int.len() > MAX_INT_DIGITS {
+        if self.int.len() > MAX_INT_DIGITS {
+            return None;
+        }
+        self.to_scale(SCALE)
+    }
+
+    /// The value in units of `10^-scale`, or `None` when it has more than `scale` decimals or
+    /// does not fit.
+    fn to_scale(&self, scale: u32) -> Option<i128> {
+        if self.frac.len() > scale as usize {
             return None;
         }
         let int: i128 = if self.int.is_empty() {
@@ -105,30 +116,73 @@ impl Decimal {
         let frac: i128 = if self.frac.is_empty() {
             0
         } else {
-            format!("{:0<6}", self.frac).parse().ok()?
+            format!("{:0<width$}", self.frac, width = scale as usize)
+                .parse()
+                .ok()?
         };
-        let value = int.checked_mul(UNIT)?.checked_add(frac)?;
+        let value = int
+            .checked_mul(10_i128.checked_pow(scale)?)?
+            .checked_add(frac)?;
         Some(if self.negative { -value } else { value })
     }
 
     /// The decimal for a value in millionths, written with the fewest decimals.
     #[must_use]
     pub fn from_scaled(value: i128) -> Self {
+        Self::from_scale(value, SCALE)
+    }
+
+    /// The decimal for a value in units of `10^-scale` (`scale` at most 18).
+    fn from_scale(value: i128, scale: u32) -> Self {
+        let scale = scale.min(MAX_SCALE);
         let magnitude = value.unsigned_abs();
-        let unit = UNIT.unsigned_abs();
+        let unit = 10_u128.pow(scale);
         let int = magnitude / unit;
         let int = if int == 0 {
             String::new()
         } else {
             int.to_string()
         };
-        let frac = format!("{:06}", magnitude % unit)
+        let frac = format!("{:0width$}", magnitude % unit, width = scale as usize)
             .trim_end_matches('0')
             .to_string();
         Self {
             negative: value < 0,
             int,
             frac,
+        }
+    }
+
+    /// The integer part as a signed number, `None` when it is too large to compute with.
+    fn int_value(&self) -> Option<i128> {
+        if self.int.len() > MAX_INT_DIGITS {
+            return None;
+        }
+        let int: i128 = if self.int.is_empty() {
+            0
+        } else {
+            self.int.parse().ok()?
+        };
+        Some(if self.negative { -int } else { int })
+    }
+
+    /// Smallest integer not below the value.
+    fn ceil_int(&self) -> Option<i128> {
+        let int = self.int_value()?;
+        if !self.negative && !self.frac.is_empty() {
+            int.checked_add(1)
+        } else {
+            Some(int)
+        }
+    }
+
+    /// Largest integer not above the value.
+    fn floor_int(&self) -> Option<i128> {
+        let int = self.int_value()?;
+        if self.negative && !self.frac.is_empty() {
+            int.checked_sub(1)
+        } else {
+            Some(int)
         }
     }
 }
@@ -141,7 +195,7 @@ pub enum OrderError {
     )]
     NoRoom { lo: String, hi: String },
     #[error(
-        "order '{0}' has more than 6 decimals or is too large to compute with; position the card with `before`/`after` another card, or fix that order by hand"
+        "order '{0}' has too many decimals or is too large to compute with; position the card with `before`/`after` another card, or fix that order by hand"
     )]
     Unrepresentable(String),
 }
@@ -153,59 +207,78 @@ fn fnv1a(text: &str) -> u64 {
     })
 }
 
-fn scaled(value: &Decimal) -> Result<i128, OrderError> {
-    value
-        .to_scaled()
-        .ok_or_else(|| OrderError::Unrepresentable(value.to_string()))
-}
-
 /// Offset in whole units, in `[0, 100)`.
 fn edge_offset(id: &str) -> i128 {
-    i128::from(fnv1a(id) % 100) * UNIT
+    i128::from(fnv1a(id) % 100)
 }
 
+/// Whole-number order `from + (1000 + offset) * direction`, where `from` is the integer
+/// ceiling (towards the end) or floor (towards the top) of the extreme neighbour.
 fn edge(id: &str, from: Option<&Decimal>, direction: i128) -> Result<Decimal, OrderError> {
     let Some(from) = from else {
         return Ok(Decimal::from_scaled(1000 * UNIT));
     };
-    let from = scaled(from)?;
-    let step = 1000 * UNIT + edge_offset(id);
-    from.checked_add(step * direction)
+    let unrepresentable = || OrderError::Unrepresentable(from.to_string());
+    let base = if direction > 0 {
+        from.ceil_int()
+    } else {
+        from.floor_int()
+    }
+    .ok_or_else(unrepresentable)?;
+    let step = 1000 + edge_offset(id);
+    base.checked_add(step * direction)
+        .and_then(|whole| whole.checked_mul(UNIT))
         .map(Decimal::from_scaled)
-        .ok_or_else(|| OrderError::Unrepresentable(Decimal::from_scaled(from).to_string()))
+        .ok_or_else(unrepresentable)
 }
 
 /// Order for the end of a column whose highest order is `max` (`1000` when `None`):
-/// `max + 1000 + offset`, the offset in `[0, 100)` derived from `id`.
+/// the next whole number at or above `max` plus 1000 plus an offset in `[0, 100)` derived
+/// from `id`.
 ///
 /// # Errors
-/// `max` has more than 6 decimals or is too large.
+/// The integer part of `max` is too large to compute with.
 pub fn end(id: &str, max: Option<&Decimal>) -> Result<Decimal, OrderError> {
     edge(id, max, 1)
 }
 
 /// Order for the top of a column whose lowest order is `min` (`1000` when `None`):
-/// `min - 1000 - offset`.
+/// the whole number at or below `min` minus 1000 minus the offset.
 ///
 /// # Errors
-/// `min` has more than 6 decimals or is too large.
+/// The integer part of `min` is too large to compute with.
 pub fn top(id: &str, min: Option<&Decimal>) -> Result<Decimal, OrderError> {
     edge(id, min, -1)
 }
 
 /// Order strictly between `lo` and `hi`: the midpoint moved by an offset derived from `id`
-/// (at most a sixth of the gap either way), then written with the fewest decimals (at most 6)
-/// that stay strictly between the neighbours.
+/// (at most a sixth of the gap either way), then written with the fewest decimals that stay
+/// strictly between the neighbours. It works at 6 decimals, or at one more than the most
+/// decimals a neighbour has when that is above 6 (at most 18).
 ///
 /// # Errors
-/// No value with at most 6 decimals fits (equal or adjacent neighbours), or a neighbour is
-/// not representable.
+/// No value fits (equal or adjacent neighbours), or a neighbour is not representable.
 pub fn between(id: &str, lo: &Decimal, hi: &Decimal) -> Result<Decimal, OrderError> {
     let no_room = || OrderError::NoRoom {
         lo: lo.to_string(),
         hi: hi.to_string(),
     };
-    let (a, b) = (scaled(lo)?, scaled(hi)?);
+    let longest = lo.frac.len().max(hi.frac.len());
+    let scale = if longest > SCALE as usize {
+        u32::try_from(longest.saturating_add(1)).unwrap_or(u32::MAX)
+    } else {
+        SCALE
+    };
+    let unrepresentable = |d: &Decimal| OrderError::Unrepresentable(d.to_string());
+    if scale > MAX_SCALE {
+        return Err(unrepresentable(if lo.frac.len() >= hi.frac.len() {
+            lo
+        } else {
+            hi
+        }));
+    }
+    let a = lo.to_scale(scale).ok_or_else(|| unrepresentable(lo))?;
+    let b = hi.to_scale(scale).ok_or_else(|| unrepresentable(hi))?;
     let gap = b.checked_sub(a).ok_or_else(no_room)?;
     if gap < 2 {
         return Err(no_room());
@@ -217,15 +290,15 @@ pub fn between(id: &str, lo: &Decimal, hi: &Decimal) -> Result<Decimal, OrderErr
         i128::from(fnv1a(id)) % (2 * sixth + 1) - sixth
     };
     let target = a + gap / 2 + offset;
-    for decimals in 0..=SCALE {
-        let step = 10_i128.pow(SCALE - decimals);
+    for decimals in 0..=scale {
+        let step = 10_i128.pow(scale - decimals);
         let floor = target.div_euclid(step) * step;
         let best = [floor, floor.saturating_add(step)]
             .into_iter()
             .filter(|c| a < *c && *c < b)
             .min_by_key(|c| (c - target).abs());
         if let Some(best) = best {
-            return Ok(Decimal::from_scaled(best));
+            return Ok(Decimal::from_scale(best, scale));
         }
     }
     Err(no_room())

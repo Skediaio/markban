@@ -219,10 +219,10 @@ fn check_card<'a>(
         Ok(Some(c)) => Some(c),
     };
 
-    match card.get("order") {
-        None => {}
-        Some(Err(e)) => push(Code::E009, fm.line_of("order"), e.to_string()),
-        Some(Ok(text)) => match Decimal::parse(&text) {
+    match value(card, "order") {
+        Ok(None) => {}
+        Err(e) => push(Code::E009, fm.line_of("order"), e.to_string()),
+        Ok(Some(text)) => match Decimal::parse(&text) {
             None => push(
                 Code::E008,
                 fm.line_of("order"),

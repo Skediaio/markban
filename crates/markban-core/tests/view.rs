@@ -131,3 +131,17 @@ fn card_detail_tolerates_missing_keys_and_unknown_cards() {
     assert_eq!(detail.description, "");
     assert!(markban_core::view::card(&b, "nope").is_none());
 }
+
+#[test]
+fn card_description_strips_a_leading_crlf() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    let cards = vec![(
+        "c.md".to_string(),
+        b"---\r\ntitle: C\r\ncolumn: a\r\n---\r\n\r\nText\r\n".to_vec(),
+    )];
+    let b = Board::parse(board, cards, vec![]).0.unwrap();
+    assert_eq!(
+        markban_core::view::card(&b, "c").unwrap().description,
+        "Text"
+    );
+}

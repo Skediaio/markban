@@ -92,6 +92,9 @@ Everything after the closing `---` is the description, free Markdown. Unknown ke
 
 **Sorting a column**: cards with an `order` ascending, ties broken by id; then cards without `order`, by id.
 
+A tool that places a card at the end of a column that has cards without `order` leaves `order` out of the
+card (it would otherwise sort before those cards); the card then sorts by id among the unordered ones.
+
 ## 5. Rules for writers
 
 These rules hold for agents editing by hand and for tools.
@@ -158,6 +161,10 @@ Column parameters accept an id or a name (case-insensitive). Positions are ancho
 When a tool picks an `order` between two neighbours, it takes the midpoint and moves it by a small offset
 derived from the card id, so two writers inserting into the same gap at once get different, deterministic
 orders.
+
+Orders written by hand may have any number of decimals. For the end and the top of a column a tool works from
+the integer ceiling or floor of the extreme order. Between two cards it works at one decimal more than the
+longest neighbour (at least 6, at most 18) and refuses beyond that.
 
 ## 8. Agent quick reference
 

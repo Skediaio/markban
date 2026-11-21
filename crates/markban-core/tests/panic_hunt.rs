@@ -117,11 +117,12 @@ fn command() -> impl Strategy<Value = Command> {
     ]
 }
 
-fn error_keys(board: &Board) -> Vec<(String, String, String)> {
+/// Error (code, file) pairs; the message is left out because it can embed changing lists.
+fn error_keys(board: &Board) -> Vec<(String, String)> {
     markban_core::check(board)
         .into_iter()
         .filter(|d| d.severity == Severity::Error)
-        .map(|d| (d.code.to_string(), d.file, d.message))
+        .map(|d| (d.code.to_string(), d.file))
         .collect()
 }
 

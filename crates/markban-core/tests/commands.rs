@@ -649,3 +649,142 @@ fn commands_on_a_board_with_existing_errors_do_not_add_new_ones() {
         "fine"
     );
 }
+
+// ---- review fixes ----
+
+#[test]
+fn edit_refuses_a_card_without_valid_frontmatter_and_leaves_it_alone() {
+    let dir = temp_board();
+    let raw = "# Not a card\nno frontmatter here\n";
+    std::fs::write(dir.path().join("cards/x.md"), raw).unwrap();
+    for json in [
+        r#"{"cmd":"card.edit","id":"x","description":"new"}"#,
+        r#"{"cmd":"card.edit","id":"x","append":"more"}"#,
+        r#"{"cmd":"card.edit","id":"x","title":"T"}"#,
+    ] {
+        let err = run_err(dir.path(), json);
+        assert!(
+            err.contains("card 'x' has no valid frontmatter (E006); fix the file by hand first"),
+            "{json}: {err}"
+        );
+        assert_eq!(read(dir.path(), "cards/x.md"), raw, "{json}");
+    }
+}
+
+#[test]
+fn column_add_repairs_an_existing_unknown_column_error() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/x.md"),
+        "---\ntitle: X\ncolumn: gone\n---\n",
+    )
+    .unwrap();
+    // Unrelated column commands keep working while the E007 exists ...
+    assert_eq!(
+        run_one(dir.path(), r#"{"cmd":"column.add","name":"Review"}"#),
+        "review"
+    );
+    run_one(dir.path(), r#"{"cmd":"column.move","column":"review"}"#);
+    run_one(dir.path(), r#"{"cmd":"column.remove","column":"review"}"#);
+    // ... and the repair itself succeeds.
+    assert_eq!(
+        run_one(
+            dir.path(),
+            r#"{"cmd":"column.add","name":"Gone","id":"gone"}"#
+        ),
+        "gone"
+    );
+    let (board, diags) = fs::load(dir.path()).unwrap();
+    assert!(board.is_some());
+    assert!(diags.is_empty(), "{diags:?}");
+}
+
+#[test]
+fn end_with_high_precision_orders_in_the_column() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/hp.md"),
+        "---\ntitle: HP\ncolumn: doing\norder: 1500.1234567\n---\n",
+    )
+    .unwrap();
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"End","column":"doing"}"#,
+    );
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Top","column":"doing","top":true}"#,
+    );
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Mid","column":"doing","after":"d"}"#,
+    );
+    assert_eq!(
+        column_ids(dir.path(), "doing"),
+        ["top", "d", "mid", "hp", "end"]
+    );
+}
+
+#[test]
+fn between_high_precision_neighbours_is_strictly_between() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/hp.md"),
+        "---\ntitle: HP\ncolumn: doing\norder: 1500.1234567\n---\n",
+    )
+    .unwrap();
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Mid","column":"doing","before":"hp"}"#,
+    );
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Mid2","column":"doing","after":"mid"}"#,
+    );
+    assert_eq!(column_ids(dir.path(), "doing"), ["d", "mid", "mid2", "hp"]);
+}
+
+#[test]
+fn end_in_a_column_with_unordered_cards_writes_no_order() {
+    // column `done` holds e, which has no order and sorts after every ordered card.
+    let dir = temp_board();
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Zeta","column":"done"}"#,
+    );
+    assert!(!read(dir.path(), "cards/zeta.md").contains("order"));
+    assert_eq!(column_ids(dir.path(), "done"), ["e", "zeta"]);
+    // Moving an ordered card to the end of that column drops its order too.
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.move","id":"d","column":"done"}"#,
+    );
+    assert!(!read(dir.path(), "cards/d.md").contains("order"));
+    assert_eq!(column_ids(dir.path(), "done"), ["d", "e", "zeta"]);
+}
+
+#[test]
+fn crlf_cards_keep_crlf_when_edited() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\n---\r\n\r\nBody\r\n",
+    )
+    .unwrap();
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.edit","id":"w","append":"more"}"#,
+    );
+    assert_eq!(
+        read(dir.path(), "cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\n---\r\n\r\nBody\r\nmore\r\n"
+    );
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.edit","id":"w","description":"one\ntwo"}"#,
+    );
+    assert_eq!(
+        read(dir.path(), "cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\n---\r\n\r\none\r\ntwo\r\n"
+    );
+}

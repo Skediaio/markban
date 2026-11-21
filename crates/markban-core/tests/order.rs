@@ -75,9 +75,8 @@ fn between_without_room_is_an_error_not_a_panic() {
 
 #[test]
 fn unrepresentable_neighbours_are_an_error() {
-    assert!(order::end("x", Some(&d("1.1234567"))).is_err());
     assert!(order::end("x", Some(&d(&"9".repeat(60)))).is_err());
-    assert!(order::between("x", &d("1.0000001"), &d("2")).is_err());
+    assert!(order::between("x", &d("1.00000000000000000001"), &d("2")).is_err());
 }
 
 #[test]
@@ -132,4 +131,30 @@ proptest::proptest! {
             Err(_) => proptest::prop_assert!(gap < 2),
         }
     }
+}
+
+#[test]
+fn end_and_top_work_with_more_than_six_decimals() {
+    let x = d("1500.1234567");
+    let e = order::end("x", Some(&x)).unwrap();
+    assert!(e > x && e > d("2500"), "{e}");
+    let t = order::top("x", Some(&x)).unwrap();
+    assert!(t < x && t < d("500.2"), "{t}");
+    let n = d("-1500.1234567");
+    assert!(order::top("x", Some(&n)).unwrap() < n);
+    assert!(order::end("x", Some(&n)).unwrap() > n);
+}
+
+#[test]
+fn between_uses_the_neighbours_precision_plus_one_digit() {
+    let (lo, hi) = (d("1500.1234567"), d("1500.1234569"));
+    let v = order::between("x", &lo, &hi).unwrap();
+    assert!(lo < v && v < hi, "{v}");
+    let (lo, hi) = (d("1500.1234567"), d("1500.12345671"));
+    let v = order::between("x", &lo, &hi).unwrap();
+    assert!(lo < v && v < hi, "{v}");
+    // Past the cap it is an error, never a panic.
+    let (lo, hi) = (d("0.1234567890123456789012"), d("0.1234567890123456789014"));
+    assert!(order::between("x", &lo, &hi).is_err());
+    assert!(order::end("x", Some(&d(&format!("1{}", "0".repeat(60))))).is_err());
 }
