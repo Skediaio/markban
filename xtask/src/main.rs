@@ -77,7 +77,7 @@ fn check_examples(root: &Path) -> Result<(), String> {
     let mut dirs: Vec<PathBuf> = entries
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.is_dir())
+        .filter(|p| p.join("board.md").is_file())
         .collect();
     dirs.sort();
     for dir in dirs {

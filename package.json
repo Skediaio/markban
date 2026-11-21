@@ -5,7 +5,8 @@
   "description": "npm workspace of the markban JavaScript packages.",
   "license": "MIT",
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/sveltekit-mdsvex"
   ],
   "engines": {
     "node": ">=20"

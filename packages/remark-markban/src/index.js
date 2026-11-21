@@ -7,10 +7,10 @@
  * Everything that comes from the board is escaped or filtered before it gets there; see `html.js`.
  * @module
  */
-import { realpathSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { openBoard } from '@markban/core';
 import { notice, renderBoard } from './board.js';
+import { locate } from './locate.js';
 
 /**
  * @typedef {object} Options
@@ -24,48 +24,6 @@ import { notice, renderBoard } from './board.js';
 /** @typedef {import('./html.js').Node} Node */
 
 const LANG = 'markban';
-
-/**
- * @param {string} base
- * @param {string} path
- * @returns {boolean} Whether `path` is `base` or below it.
- */
-function isInside(base, path) {
-  const rel = relative(base, path);
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
-/**
- * Finds the board directory for a `given` path, refusing anything outside the boundary.
- * @param {string} given
- * @param {{ base: string, boundary: string }} where
- * @returns {{ dir: string } | { problem: string }}
- */
-function locate(given, { base, boundary }) {
-  const outside = {
-    problem: `board path '${given}' is outside the allowed root; use a path inside it or set the \`root\` option`,
-  };
-  const wanted = resolve(base, given);
-  if (!isInside(boundary, wanted)) return outside;
-  let real;
-  try {
-    real = realpathSync(wanted);
-  } catch {
-    return { problem: `board '${given}' is not a directory; use the path of a directory that contains board.md` };
-  }
-  let realBoundary = boundary;
-  try {
-    realBoundary = realpathSync(boundary);
-  } catch {
-    // A boundary that does not exist cannot contain anything.
-    return outside;
-  }
-  if (!isInside(realBoundary, real)) return outside;
-  if (!statSync(real, { throwIfNoEntry: false })?.isDirectory()) {
-    return { problem: `board '${given}' is not a directory; use the path of a directory that contains board.md` };
-  }
-  return { dir: real };
-}
 
 /**
  * The directory of the processed file. vfile has `dirname`; mdsvex 0.12 builds its files with a

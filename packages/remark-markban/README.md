@@ -36,3 +36,6 @@ With mdsvex 0.12, add it to `remarkPlugins`; nothing else is needed.
   build error.
 - Optional styling: `import 'remark-markban/style.css'`. Class names: `markban-board`, `markban-column`,
   `markban-card`, `markban-card-details`, `markban-count`, `markban-notice`, ...
+
+Internal building blocks, also used by `@markban/svelte`: `remark-markban/html` (the sanitiser, `renderMarkdown` on an
+mdast tree) and `remark-markban/locate` (resolve a board path inside a root, refusing escapes and symlinks that leave it).

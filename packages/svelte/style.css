@@ -1,0 +1,75 @@
+/* `<Markban>` uses the look of remark-markban (imported, not copied) plus the rules below for the
+   parts only the component has: cards that are buttons, and the card dialog. */
+@import "remark-markban/style.css";
+
+.markban-card-button {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.markban-card-button:focus-visible {
+  outline: 2px solid var(--markban-accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.markban-dialog {
+  width: min(40rem, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 16px 20px;
+  border: 1px solid var(--markban-border);
+  border-radius: 12px;
+  background: var(--markban-surface);
+  color: var(--markban-text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  overflow-wrap: anywhere;
+}
+.markban-dialog::backdrop { background: rgba(10, 14, 20, 0.55); }
+.markban-dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.markban-dialog-title { margin: 0; font-size: 1.25rem; }
+.markban-dialog-column { margin: 2px 0 12px; color: var(--markban-muted); font-size: 0.9rem; }
+.markban-dialog-close {
+  flex: none;
+  padding: 4px 12px;
+  border: 1px solid var(--markban-border);
+  border-radius: 6px;
+  background: var(--markban-column);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.markban-dialog-close:focus-visible {
+  outline: 2px solid var(--markban-accent);
+  outline-offset: 2px;
+}
+.markban-dialog-body > :first-child { margin-top: 0; }
+.markban-dialog-body > :last-child { margin-bottom: 0; }
+.markban-dialog-body a { color: var(--markban-accent); }
+.markban-dialog-body pre {
+  overflow-x: auto;
+  background: var(--markban-column);
+  padding: 10px;
+  border-radius: 6px;
+}
+.markban-dialog-body code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+.markban-dialog-body table { border-collapse: collapse; }
+.markban-dialog-body th,
+.markban-dialog-body td { border: 1px solid var(--markban-border); padding: 2px 8px; }
+.markban-dialog-empty { margin: 0; color: var(--markban-muted); }
+
+@media (max-width: 640px) {
+  .markban-board { padding: 12px; }
+  .markban-column { flex-basis: 85%; }
+}

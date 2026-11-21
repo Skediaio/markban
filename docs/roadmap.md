@@ -21,11 +21,13 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 | 7 | Plugins: `@markban/core` (WASM), `remark-markban` | In progress |
 | 8 | Server: `markban serve`, several boards, tokens with board access, command API, log; CLI remote mode | In progress |
 | 9 | Viewer: board list, login, editing in the browser (move, add, edit) | Open |
-| 10 | `@markban/svelte`, Vite plugin, SvelteKit + mdsvex example | Open |
+| 10 | `@markban/svelte`, Vite plugin, SvelteKit + mdsvex example | Done 2026-11-21 (live reload of the dev server not yet checked in a real browser) |
 | 11 | Agent skill for local and server mode | Open |
 | 12 | `undo`, format v0.2 (assignee, labels, extra keys shown as chips) | Open |
 
 ## Open
+
+- `@markban/svelte`: check Escape, focus return and live reload in a real browser (tests use a simulated DOM).
 
 - Viewer: render task-list items as checkboxes; show the column name instead of its id in the card detail.
 - Independent review of iteration 1.

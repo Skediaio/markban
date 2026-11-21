@@ -42,6 +42,17 @@ Version 0.0.0: format spec v0.1 is settled, chosen by measurement
 - **Example board**: [`examples/demo-board`](examples/demo-board)
 - **Rules for agents and contributors**: [`AGENTS.md`](AGENTS.md)
 
+## Use it in your docs
+
+Two ways to put a board in a documentation site, both static and both safe for untrusted card text:
+
+- **Markdown (mdsvex, unified):** [`remark-markban`](packages/remark-markban) turns a fenced `markban` block that
+  names a board directory into HTML.
+- **Svelte 5 and Vite:** [`@markban/svelte`](packages/svelte) gives `<Markban {board} />` and a Vite plugin:
+  `import board from 'markban:boards/roadmap'`. In dev, an edit of the board reloads the page.
+
+A working SvelteKit app with both: [`examples/sveltekit-mdsvex`](examples/sveltekit-mdsvex).
+
 ## Planned layout
 
 Dependencies point downwards only.
