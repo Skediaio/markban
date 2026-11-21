@@ -5,7 +5,7 @@ use crate::frontmatter::{
     Frontmatter, FrontmatterError, ValueError, key_line, line_number, parse_value, rewrite_line,
     strip_eol,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use thiserror::Error;
 
@@ -345,6 +345,9 @@ pub struct Board {
     pub cards: BTreeMap<String, CardFile>,
     /// Names in `cards/` that are not `<id>.md` (reported as W001).
     pub ignored: Vec<String>,
+    /// Names in `cards/` that no card in `cards` accounts for (ignored entries, files that are
+    /// not UTF-8, symbolic links): an id whose `<id>.md` is among them is not free.
+    pub taken: BTreeSet<String>,
 }
 
 fn utf8_diagnostic(file: &str, bytes: &[u8]) -> Option<Diagnostic> {
@@ -363,6 +366,13 @@ fn utf8_diagnostic(file: &str, bytes: &[u8]) -> Option<Diagnostic> {
 }
 
 impl Board {
+    /// Whether a card with this id exists, or its file name is occupied on disk by something
+    /// the board could not load.
+    #[must_use]
+    pub fn id_taken(&self, id: &str) -> bool {
+        self.cards.contains_key(id) || self.taken.contains(&format!("{id}.md"))
+    }
+
     /// Builds a board from in-memory files. Tolerant: whatever parses is kept, problems come
     /// back as diagnostics (E001 for `board.md`, E009 for files that are not UTF-8).
     ///
@@ -378,6 +388,7 @@ impl Board {
         let mut diagnostics = Vec::new();
         let mut card_files = BTreeMap::new();
         let mut ignored = ignored;
+        let mut taken = BTreeSet::new();
         for (name, bytes) in cards {
             let Some(id) = name.strip_suffix(".md") else {
                 ignored.push(name);
@@ -388,11 +399,15 @@ impl Board {
                 Ok(text) => {
                     card_files.insert(id.to_string(), CardFile::parse(id, text));
                 }
-                Err(_) => diagnostics.extend(utf8_diagnostic(&file, &bytes)),
+                Err(_) => {
+                    taken.insert(name.clone());
+                    diagnostics.extend(utf8_diagnostic(&file, &bytes));
+                }
             }
         }
         ignored.sort();
         ignored.dedup();
+        taken.extend(ignored.iter().cloned());
 
         let board = match std::str::from_utf8(board_md) {
             Err(_) => {
@@ -416,6 +431,7 @@ impl Board {
             board,
             cards: card_files,
             ignored,
+            taken,
         });
         (board, diagnostics)
     }
