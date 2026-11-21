@@ -40,6 +40,8 @@ struct CardsRead {
     ignored: Vec<String>,
     /// Symbolic links, which are never followed.
     symlinks: Vec<String>,
+    /// `(file name, reason)` of regular `*.md` files that could not be read.
+    unreadable: Vec<(String, String)>,
 }
 
 /// Reads the `(name, path)` entries of `cards/`. Entries that vanish while reading are skipped.
@@ -58,13 +60,30 @@ fn read_cards(mut entries: Vec<(String, PathBuf)>) -> Result<CardsRead, LoadErro
             match std::fs::read(&path) {
                 Ok(bytes) => read.cards.push((name, bytes)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(io(&path)(e)),
+                Err(e) => read.unreadable.push((name, e.to_string())),
             }
         } else {
             read.ignored.push(name);
         }
     }
     Ok(read)
+}
+
+fn is_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+}
+
+/// Refuses to write through a symbolic link `rel` (a directory or file inside the board).
+fn refuse_link(dir: &Path, rel: &str) -> Result<(), ApplyError> {
+    if is_symlink(&dir.join(rel)) {
+        return Err(ApplyError::Io {
+            path: rel.to_string(),
+            source: std::io::Error::other(format!(
+                "'{rel}' is a symbolic link and markban never writes through links; replace it with a regular file or directory"
+            )),
+        });
+    }
+    Ok(())
 }
 
 fn symlink_diagnostic(file: impl Into<String>) -> Diagnostic {
@@ -80,7 +99,9 @@ fn symlink_diagnostic(file: impl Into<String>) -> Diagnostic {
 ///
 /// Returns the board (`None` when `board.md` is missing or unusable) and all diagnostics from
 /// parsing and [`check`]. One bad card never stops the rest from loading. Symbolic links are
-/// never followed: one in `cards/` is reported as W001 and `board.md` being one counts as missing.
+/// never followed: one in `cards/` is reported as W001, `board.md` being one counts as missing and
+/// a `cards/` that is itself a link is reported as W001 and not read. A card that cannot be read
+/// is reported as E009 and its name stays taken.
 /// The tool-owned `.markban.lock` file is not part of the board and is never reported.
 ///
 /// # Errors
@@ -109,7 +130,8 @@ pub fn load(dir: &Path) -> Result<(Option<Board>, Vec<Diagnostic>), LoadError> {
 
     let mut read = CardsRead::default();
     let cards_dir = dir.join("cards");
-    if cards_dir.is_dir() {
+    let cards_is_link = is_symlink(&cards_dir);
+    if !cards_is_link && cards_dir.is_dir() {
         let mut entries = Vec::new();
         for entry in std::fs::read_dir(&cards_dir).map_err(io(&cards_dir))? {
             let entry = entry.map_err(io(&cards_dir))?;
@@ -127,8 +149,22 @@ pub fn load(dir: &Path) -> Result<(Option<Board>, Vec<Diagnostic>), LoadError> {
             .iter()
             .map(|name| symlink_diagnostic(format!("cards/{name}"))),
     );
+    diagnostics.extend(read.unreadable.iter().map(|(name, reason)| {
+        Diagnostic::new(
+            Code::E009,
+            format!("cards/{name}"),
+            None,
+            format!("cannot read file: {reason}"),
+        )
+    }));
+    if cards_is_link {
+        diagnostics.push(symlink_diagnostic("cards"));
+    }
     let board = board.map(|mut board| {
         board.taken.extend(read.symlinks);
+        board
+            .taken
+            .extend(read.unreadable.into_iter().map(|(name, _)| name));
         board
     });
     if let Some(board) = &board {
@@ -487,7 +523,7 @@ impl ApplyError {
 
 fn apply_steps(
     dir: &Path,
-    taken: &BTreeSet<String>,
+    present: &BTreeSet<String>,
     steps: &[Step<'_>],
     hook: Hook<'_>,
 ) -> Result<Vec<String>, Failure> {
@@ -495,12 +531,15 @@ fn apply_steps(
         written: written.to_vec(),
         error,
     };
+    if steps.iter().any(|s| s.path().starts_with("cards/")) {
+        refuse_link(dir, "cards").map_err(|e| fail(&[], e))?;
+    }
     // Check everything first, so a conflict normally writes nothing at all.
     for step in steps {
         let checked = match step {
             Step::Create { path, .. } => {
                 let name = path.strip_prefix("cards/").unwrap_or(path);
-                if taken.contains(name) {
+                if present.iter().any(|t| t.eq_ignore_ascii_case(name)) {
                     Err(ApplyError::Exists {
                         path: (*path).to_string(),
                     })
@@ -552,7 +591,14 @@ fn apply_boards(
     let (old, new) = (file_map(before), file_map(after));
     let board_at = board_placement(before, after);
     let steps = plan(&old, &new, &board_at);
-    apply_steps(dir, &before.taken, &steps, hook)
+    // Everything that existed at load time, compared ignoring case on create.
+    let present: BTreeSet<String> = before
+        .taken
+        .iter()
+        .cloned()
+        .chain(before.cards.keys().map(|id| format!("{id}.md")))
+        .collect();
+    apply_steps(dir, &present, &steps, hook)
 }
 
 /// Writes the difference between `before` (what was read) and `after` to `dir`, file by file,
@@ -615,6 +661,7 @@ fn apply_init_inner(dir: &Path, after: &Board, hook: Hook<'_>) -> Result<Vec<Str
     std::fs::create_dir_all(dir)
         .map_err(io_err("."))
         .map_err(fail)?;
+    refuse_link(dir, "cards").map_err(fail)?;
     let cards = dir.join("cards");
     if let Ok(mut entries) = std::fs::read_dir(&cards)
         && entries.next().is_some()
@@ -634,41 +681,79 @@ const LOCK_FILE: &str = ".markban.lock";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const LOCK_POLL: Duration = Duration::from_millis(50);
 
+/// A held board lock, and what to undo when the run turns out not to create a board.
+struct BoardLock {
+    file: std::fs::File,
+    dir: PathBuf,
+    created_dir: bool,
+}
+
+impl BoardLock {
+    /// Removes the lock file, and `dir` when it was created for this run and is still empty.
+    /// Best effort; for a run that failed before a board existed.
+    fn discard(self) {
+        let _ = std::fs::remove_file(self.dir.join(LOCK_FILE));
+        drop(self.file);
+        if self.created_dir {
+            let _ = std::fs::remove_dir(&self.dir);
+        }
+    }
+}
+
 /// Takes the exclusive advisory lock of the board in `dir`, polling for up to [`LOCK_TIMEOUT`].
-/// `None` when `dir` is no directory (the run will report why) or the filesystem has no locks.
-fn lock_board(dir: &Path, cmds: &[Command]) -> Result<Option<std::fs::File>, RunError> {
-    if !dir.exists() && matches!(cmds.first(), Some(Command::BoardInit { .. })) {
-        std::fs::create_dir_all(dir).map_err(|source| {
-            RunError::Apply(ApplyError::Io {
-                path: ".".into(),
-                source,
-            })
-        })?;
+///
+/// `None` (no lock file is created) when `dir` is no directory, when it holds no `board.md` and
+/// the commands do not start with a valid `board.init` (the run will report why), or when the
+/// filesystem has no locks. For `board.init` the directory is only created once the init has
+/// validated.
+///
+/// The lock file is never opened through a symbolic link: it is checked with `symlink_metadata`
+/// and refused. A link planted between that check and the open is not caught (no portable
+/// `O_NOFOLLOW`); the lock is advisory and holds no data, so the exposure is the empty file
+/// that `open(create)` would make at the link's target.
+fn lock_board(dir: &Path, cmds: &[Command]) -> Result<Option<BoardLock>, RunError> {
+    let apply_io = |path: &str, source| {
+        RunError::Apply(ApplyError::Io {
+            path: path.into(),
+            source,
+        })
+    };
+    let mut created_dir = false;
+    if !dir.join("board.md").exists() {
+        match cmds.first() {
+            Some(Command::BoardInit { title, columns }) if Board::init(title, columns).is_ok() => {
+                if !dir.exists() {
+                    std::fs::create_dir_all(dir).map_err(|e| apply_io(".", e))?;
+                    created_dir = true;
+                }
+            }
+            _ => return Ok(None),
+        }
     }
     if !dir.is_dir() {
         return Ok(None);
     }
+    refuse_link(dir, LOCK_FILE).map_err(RunError::Apply)?;
     let path = dir.join(LOCK_FILE);
-    let io_error = |source| {
-        RunError::Apply(ApplyError::Io {
-            path: LOCK_FILE.into(),
-            source,
-        })
-    };
     let file = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(&path)
-        .map_err(io_error)?;
+        .map_err(|e| apply_io(LOCK_FILE, e))?;
+    let lock = BoardLock {
+        file,
+        dir: dir.to_path_buf(),
+        created_dir,
+    };
     let start = Instant::now();
     loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(Some(file)),
+        match lock.file.try_lock() {
+            Ok(()) => return Ok(Some(lock)),
             Err(TryLockError::Error(e)) if e.kind() == std::io::ErrorKind::Unsupported => {
                 return Ok(None);
             }
-            Err(TryLockError::Error(e)) => return Err(io_error(e)),
+            Err(TryLockError::Error(e)) => return Err(apply_io(LOCK_FILE, e)),
             Err(TryLockError::WouldBlock) if start.elapsed() >= LOCK_TIMEOUT => {
                 return Err(RunError::Locked {
                     path: path.display().to_string(),
@@ -709,18 +794,30 @@ pub fn run_with_hooks(
     if cmds.is_empty() {
         return Ok(Vec::new());
     }
-    let _lock = lock_board(dir, cmds)?;
+    let lock = lock_board(dir, cmds)?;
     let mut last = String::new();
+    let mut result = None;
     for attempt in 0..MAX_ATTEMPTS {
         match attempt_run(dir, cmds, &mut |()| between(attempt), &mut *write) {
             Err(RunError::Apply(ApplyError::Conflict { path })) => last = path,
-            other => return other,
+            other => {
+                result = Some(other);
+                break;
+            }
         }
     }
-    Err(RunError::Contended {
+    let result = result.unwrap_or(Err(RunError::Contended {
         attempts: MAX_ATTEMPTS,
         path: last,
-    })
+    }));
+    // A run that failed without creating a board leaves no lock file (or directory) behind.
+    if let Some(lock) = lock
+        && result.is_err()
+        && !dir.join("board.md").exists()
+    {
+        lock.discard();
+    }
+    result
 }
 
 /// [`run`] with a hook called after execute and before apply with the attempt number (from 0).

@@ -367,10 +367,13 @@ fn utf8_diagnostic(file: &str, bytes: &[u8]) -> Option<Diagnostic> {
 
 impl Board {
     /// Whether a card with this id exists, or its file name is occupied on disk by something
-    /// the board could not load.
+    /// the board could not load. Compared ignoring ASCII case, so ids stay distinct on
+    /// case-insensitive filesystems.
     #[must_use]
     pub fn id_taken(&self, id: &str) -> bool {
-        self.cards.contains_key(id) || self.taken.contains(&format!("{id}.md"))
+        let file = format!("{id}.md");
+        self.cards.keys().any(|c| c.eq_ignore_ascii_case(id))
+            || self.taken.iter().any(|t| t.eq_ignore_ascii_case(&file))
     }
 
     /// Builds a board from in-memory files. Tolerant: whatever parses is kept, problems come

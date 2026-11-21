@@ -23,7 +23,8 @@ A board is a directory:
 
 `.markban.lock` is created by tools that write the board, to take turns (see § 5). It is empty, may be left
 in place, should be git-ignored, and tools never report it. Symbolic links are never followed: a link in
-`cards/` is ignored (W001) and a `board.md` that is a link counts as missing.
+`cards/` is ignored (W001), a `cards/` directory that is itself a link is ignored (W001) and tools refuse to
+write into it, and a `board.md` that is a link counts as missing.
 
 Each card carries its own column and position, so moving, adding, editing or removing a card changes exactly
 one file. No change to a card touches `board.md`.
@@ -96,6 +97,7 @@ Sessions expire after 5 minutes instead of 30.
 Everything after the closing `---` is the description, free Markdown. Unknown keys are preserved.
 
 **Sorting a column**: cards with an `order` ascending, ties broken by id; then cards without `order`, by id.
+A card whose `order` is invalid (E008) counts as a card without `order`.
 
 A tool that places a card at the end of a column that has cards without `order` leaves `order` out of the
 card (it would otherwise sort before those cards); the card then sorts by id among the unordered ones.
@@ -121,7 +123,8 @@ These rules hold for agents editing by hand and for tools.
   read, change and write cycle, so two tools never interleave. By hand, there is nothing to lock: just
   follow the rules above.
 - Write in an order that keeps the board valid at every step: when a change adds columns, write `board.md`
-  first; when it removes columns, write it last, after the cards moved away.
+  first; when it removes columns, write it last, after the cards moved away; when it does both, write a
+  `board.md` with the union of the old and new columns first, then the cards, then the final `board.md`.
 
 ## 6. Validity
 
@@ -179,6 +182,7 @@ longest neighbour (at least 6, at most 18) and refuses beyond that.
 ## 8. Agent quick reference
 
 ```
+markban init "Title" COL...      # create a board in the current directory
 markban ls                      # whole board, one line per card
 markban show <id>               # one card with its description
 markban add "Title" [-c Doing] [-d "text"] [--top | --before <id> | --after <id>]
@@ -203,7 +207,7 @@ Exit codes:
 | 0 | Success (`check`: no errors; warnings are fine). |
 | 1 | Invalid input or the command was refused: fix the input. `check` also uses 1 when the board has errors. |
 | 2 | Usage error (unknown option, missing argument). |
-| 3 | Contention: another writer changed the board while the command ran. Nothing was written; retry. |
+| 3 | Contention: another writer changed the board while the command ran, or the board lock could not be taken within the timeout. Nothing was written; retry. |
 | 4 | Partially applied: some files were written before a failure. Run `markban check` and inspect before retrying. |
 
 ## Reserved for later versions

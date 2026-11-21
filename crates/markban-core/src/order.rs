@@ -191,9 +191,9 @@ impl Decimal {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum OrderError {
     #[error(
-        "no room for an order between {lo} and {hi} within 6 decimals; position the card with `before`/`after` elsewhere in the column"
+        "no room for an order between {lo} and {hi} within {scale} decimals; position the card with `before`/`after` elsewhere in the column"
     )]
-    NoRoom { lo: String, hi: String },
+    NoRoom { lo: String, hi: String, scale: u32 },
     #[error(
         "order '{0}' has too many decimals or is too large to compute with; position the card with `before`/`after` another card, or fix that order by hand"
     )]
@@ -253,30 +253,22 @@ pub fn top(id: &str, min: Option<&Decimal>) -> Result<Decimal, OrderError> {
 
 /// Order strictly between `lo` and `hi`: the midpoint moved by an offset derived from `id`
 /// (at most a sixth of the gap either way), then written with the fewest decimals that stay
-/// strictly between the neighbours. It works at 6 decimals, or at one more than the most
-/// decimals a neighbour has when that is above 6 (at most 18).
+/// strictly between the neighbours. It works at one more decimal than the longest neighbour
+/// (at least 6, at most 18).
 ///
 /// # Errors
 /// No value fits (equal or adjacent neighbours), or a neighbour is not representable.
 pub fn between(id: &str, lo: &Decimal, hi: &Decimal) -> Result<Decimal, OrderError> {
+    let longest = lo.frac.len().max(hi.frac.len());
+    let scale = u32::try_from(longest.saturating_add(1))
+        .unwrap_or(MAX_SCALE)
+        .clamp(SCALE, MAX_SCALE);
     let no_room = || OrderError::NoRoom {
         lo: lo.to_string(),
         hi: hi.to_string(),
-    };
-    let longest = lo.frac.len().max(hi.frac.len());
-    let scale = if longest > SCALE as usize {
-        u32::try_from(longest.saturating_add(1)).unwrap_or(u32::MAX)
-    } else {
-        SCALE
+        scale,
     };
     let unrepresentable = |d: &Decimal| OrderError::Unrepresentable(d.to_string());
-    if scale > MAX_SCALE {
-        return Err(unrepresentable(if lo.frac.len() >= hi.frac.len() {
-            lo
-        } else {
-            hi
-        }));
-    }
     let a = lo.to_scale(scale).ok_or_else(|| unrepresentable(lo))?;
     let b = hi.to_scale(scale).ok_or_else(|| unrepresentable(hi))?;
     let gap = b.checked_sub(a).ok_or_else(no_room)?;

@@ -64,7 +64,8 @@ fn between_uses_the_fewest_decimals() {
 
 #[test]
 fn between_without_room_is_an_error_not_a_panic() {
-    assert!(order::between("x", &d("1000"), &d("1000.000001")).is_err());
+    // Adjacent at the neighbours' own scale (capped at 18 decimals): nothing fits.
+    assert!(order::between("x", &d("1.000000000000000001"), &d("1.000000000000000002")).is_err());
     assert!(order::between("x", &d("5"), &d("5")).is_err());
     assert!(order::between("x", &d("6"), &d("5")).is_err());
     let msg = order::between("x", &d("5"), &d("5"))
@@ -157,4 +158,27 @@ fn between_uses_the_neighbours_precision_plus_one_digit() {
     let (lo, hi) = (d("0.1234567890123456789012"), d("0.1234567890123456789014"));
     assert!(order::between("x", &lo, &hi).is_err());
     assert!(order::end("x", Some(&d(&format!("1{}", "0".repeat(60))))).is_err());
+}
+
+#[test]
+fn between_works_one_decimal_beyond_a_six_decimal_neighbour() {
+    // Spec section 7: one more decimal than the longest neighbour (at least 6, at most 18).
+    let v = order::between("x", &d("1000"), &d("1000.000001")).unwrap();
+    assert!(d("1000") < v && v < d("1000.000001"), "{v}");
+    let decimals = v.to_string().split_once('.').map_or(0, |(_, f)| f.len());
+    assert_eq!(decimals, 7, "{v}");
+    let v = order::between("x", &d("1.123456"), &d("1.123457")).unwrap();
+    assert!(d("1.123456") < v && v < d("1.123457"), "{v}");
+}
+
+#[test]
+fn no_room_names_the_actual_scale() {
+    let msg = order::between("x", &d("1.000000000000000001"), &d("1.000000000000000002"))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("18 decimals"), "{msg}");
+    let msg = order::between("x", &d("5"), &d("5"))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("6 decimals"), "{msg}");
 }

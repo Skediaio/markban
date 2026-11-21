@@ -418,3 +418,166 @@ fn symlinked_board_md_is_not_read() {
         "{diags:?}"
     );
 }
+
+// ---- a symlinked cards/ directory ----
+
+#[cfg(unix)]
+#[test]
+fn symlinked_cards_dir_is_not_read_and_reported_as_w001() {
+    let dir = temp_board();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        outside.path().join("secret.md"),
+        "---\ntitle: S\ncolumn: todo\n---\n",
+    )
+    .unwrap();
+    std::fs::remove_dir_all(dir.path().join("cards")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("cards")).unwrap();
+    let (board, diags) = fs::load(dir.path()).unwrap();
+    assert!(board.unwrap().cards.is_empty());
+    assert!(
+        diags.iter().any(|d| d.code == Code::W001
+            && d.file == "cards"
+            && d.message.contains("symbolic link")),
+        "{diags:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn writes_into_a_symlinked_cards_dir_are_refused() {
+    let dir = temp_board();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::fs::remove_dir_all(dir.path().join("cards")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("cards")).unwrap();
+    let err = fs::run(dir.path(), &cmds(&[r#"{"cmd":"card.add","title":"Leak"}"#])).unwrap_err();
+    assert!(err.to_string().contains("symbolic link"), "{err}");
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_into_a_symlinked_cards_dir_is_refused() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let outside = tempfile::TempDir::new().unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("cards")).unwrap();
+    let err = fs::run(
+        dir.path(),
+        &cmds(&[r#"{"cmd":"board.init","title":"T","columns":["A"]}"#]),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("symbolic link"), "{err}");
+    assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_lock_file_is_refused() {
+    let dir = temp_board();
+    let outside = tempfile::TempDir::new().unwrap();
+    let target = outside.path().join("victim");
+    std::os::unix::fs::symlink(&target, dir.path().join(".markban.lock")).unwrap();
+    let err = fs::run(dir.path(), &cmds(&[r#"{"cmd":"card.remove","id":"a"}"#])).unwrap_err();
+    assert!(err.to_string().contains("symbolic link"), "{err}");
+    assert!(!target.exists());
+}
+
+// ---- unreadable cards ----
+
+#[cfg(unix)]
+#[test]
+fn one_unreadable_card_does_not_fail_the_load() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = temp_board();
+    let path = dir.path().join("cards/a.md");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&path).is_ok() {
+        return; // running as root: permissions do not apply
+    }
+    let (board, diags) = fs::load(dir.path()).unwrap();
+    let board = board.unwrap();
+    assert!(!board.cards.contains_key("a") && board.cards.contains_key("b"));
+    assert!(board.id_taken("a"));
+    assert!(
+        diags.iter().any(|d| d.code == Code::E009
+            && d.file == "cards/a.md"
+            && d.message.starts_with("cannot read file: ")),
+        "{diags:?}"
+    );
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+// ---- the lock file only belongs in boards ----
+
+#[test]
+fn run_in_a_directory_without_a_board_leaves_no_lock() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let err = fs::run(dir.path(), &cmds(&[r#"{"cmd":"card.remove","id":"a"}"#])).unwrap_err();
+    assert!(matches!(err, RunError::NoBoard { .. }), "{err:?}");
+    assert!(!exists(dir.path(), ".markban.lock"));
+}
+
+#[test]
+fn failed_init_leaves_nothing_behind() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let missing = dir.path().join("new-board");
+    let bad = cmds(&[r#"{"cmd":"board.init","title":"T","columns":[]}"#]);
+    assert!(fs::run(&missing, &bad).is_err());
+    assert!(!missing.exists());
+    assert!(fs::run(dir.path(), &bad).is_err());
+    assert!(!exists(dir.path(), ".markban.lock"));
+    // Init is fine but a later command fails: still nothing behind.
+    let later = cmds(&[
+        r#"{"cmd":"board.init","title":"T","columns":["A"]}"#,
+        r#"{"cmd":"card.remove","id":"nope"}"#,
+    ]);
+    assert!(fs::run(&missing, &later).is_err());
+    assert!(!missing.exists());
+    assert!(fs::run(dir.path(), &later).is_err());
+    assert!(!exists(dir.path(), ".markban.lock") && !exists(dir.path(), "board.md"));
+}
+
+#[test]
+fn successful_init_still_works_and_locks() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let board = dir.path().join("new-board");
+    fs::run(
+        &board,
+        &cmds(&[r#"{"cmd":"board.init","title":"T","columns":["A"]}"#]),
+    )
+    .unwrap();
+    assert!(exists(&board, "board.md"));
+}
+
+// ---- names that differ only in case ----
+
+#[test]
+fn card_add_avoids_a_name_that_differs_only_in_case() {
+    let dir = temp_board();
+    std::fs::write(dir.path().join("cards/FOO.md"), [0xff, 0xfe, b'\n']).unwrap();
+    let out = fs::run(dir.path(), &cmds(&[r#"{"cmd":"card.add","title":"Foo"}"#])).unwrap();
+    assert_eq!(out[0].id, "foo-2");
+    let err = fs::run(
+        dir.path(),
+        &cmds(&[r#"{"cmd":"card.add","title":"x","id":"foo"}"#]),
+    )
+    .unwrap_err();
+    assert!(matches!(err, RunError::Command { .. }), "{err:?}");
+}
+
+#[test]
+fn creating_a_case_variant_of_an_existing_name_is_exists_not_conflict() {
+    let dir = temp_board();
+    let clean = loaded(dir.path());
+    let mut after = clean.clone();
+    execute_batch(
+        &mut after,
+        &cmds(&[r#"{"cmd":"card.add","title":"x","id":"foo"}"#]),
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("cards/FOO.md"), [0xff, 0xfe, b'\n']).unwrap();
+    let before = loaded(dir.path());
+    let err = fs::apply(dir.path(), &before, &after).unwrap_err();
+    assert!(matches!(err, ApplyError::Exists { .. }), "{err:?}");
+    assert!(!exists(dir.path(), "cards/foo.md"));
+}
