@@ -12,8 +12,21 @@ use markban_core::view::{BoardView, CardSummary};
 
 const STYLE: Asset = asset!("/assets/main.css");
 
+#[cfg(not(feature = "server"))]
 fn main() {
     dioxus::launch(App);
+}
+
+/// The server serves the app through a custom router so every request passes the `Host` check.
+#[cfg(feature = "server")]
+fn main() {
+    dioxus::serve(|| async {
+        Ok(
+            dioxus::server::router(App).layer(dioxus::server::axum::middleware::from_fn(
+                server::host_guard,
+            )),
+        )
+    });
 }
 
 #[cfg(target_arch = "wasm32")]

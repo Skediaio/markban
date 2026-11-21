@@ -1,6 +1,11 @@
 //! Server side: board loading, markdown rendering, file watching and the revision counter.
 
 use crate::api::CardDetail;
+use dioxus::server::axum::extract::Request;
+use dioxus::server::axum::http::{StatusCode, header::HOST};
+use dioxus::server::axum::middleware::Next;
+use dioxus::server::axum::response::{IntoResponse, Response};
+use markban_core::board::Board;
 use markban_core::diagnostic::{Code, Diagnostic};
 use markban_core::view::{BoardView, view};
 use notify_debouncer_full::notify::{self, RecursiveMode};
@@ -13,16 +18,49 @@ use tokio::sync::watch;
 const DEBOUNCE: Duration = Duration::from_millis(150);
 const LONG_POLL: Duration = Duration::from_secs(25);
 
+/// Whether `url` is relative: no scheme and not protocol-relative. Browsers ignore tabs and
+/// newlines inside URLs and read `\` like `/`, so those are normalised first.
+fn is_relative_url(url: &str) -> bool {
+    let url: String = url
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let url = url.trim_start_matches(|c: char| c.is_whitespace() || c.is_control());
+    if url.starts_with("//") || url.starts_with("/\\") || url.starts_with('\\') {
+        return false;
+    }
+    let head = url.split(['/', '?', '#']).next().unwrap_or_default();
+    !head.contains(':')
+}
+
 /// Renders Markdown to HTML and strips everything active (scripts, event handlers,
 /// `javascript:` URLs). Agents write this content, so it is never trusted.
+///
+/// Images with a remote `src` are dropped (a remote image leaks the viewer's address). Task-list
+/// items become disabled checkboxes; any `<input>` is forced to a disabled checkbox.
 #[must_use]
 pub fn render_markdown(markdown: &str) -> String {
     let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, pulldown_cmark::Parser::new(markdown));
-    ammonia::clean(&html)
+    let parser =
+        pulldown_cmark::Parser::new_ext(markdown, pulldown_cmark::Options::ENABLE_TASKLISTS);
+    pulldown_cmark::html::push_html(&mut html, parser);
+    let mut sanitizer = ammonia::Builder::default();
+    sanitizer
+        .add_tags(["input"])
+        .add_tag_attributes("input", ["checked"])
+        .set_tag_attribute_value("input", "type", "checkbox")
+        .set_tag_attribute_value("input", "disabled", "")
+        .attribute_filter(|element, attribute, value| {
+            if element == "img" && attribute == "src" && !is_relative_url(value) {
+                None
+            } else {
+                Some(value.into())
+            }
+        });
+    sanitizer.clean(&html).to_string()
 }
 
-/// Watches `board.md` and `cards/` of a board directory and bumps a revision on every change.
+/// Watches a board directory and bumps a revision on every change to `board.md` or `cards/*.md`.
 pub struct Watcher {
     _debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
 }
@@ -34,24 +72,26 @@ impl Watcher {
     /// A message when the directory cannot be watched.
     pub fn start(dir: &Path) -> Result<(Self, watch::Receiver<u64>), String> {
         let (tx, rx) = watch::channel(1_u64);
+        let root = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let watched = root.clone();
         let handler = move |result: DebounceEventResult| {
-            if matches!(&result, Ok(events) if events.is_empty()) {
-                return;
+            let relevant = match &result {
+                Ok(events) => events.iter().any(|event| {
+                    !event.kind.is_access() && event.paths.iter().any(|p| is_board_path(&root, p))
+                }),
+                Err(_) => true,
+            };
+            if relevant {
+                tx.send_modify(|rev| *rev += 1);
             }
-            tx.send_modify(|rev| *rev += 1);
         };
         let mut debouncer = new_debouncer(DEBOUNCE, None, handler)
             .map_err(|e| format!("cannot start the file watcher: {e}"))?;
-        // The directory itself catches board.md and the creation of cards/; cards/ catches edits.
+        // The whole directory, recursively: it is tiny, and this also sees a `cards/` that is
+        // created after the viewer started. Events are filtered in the handler.
         debouncer
-            .watch(dir, RecursiveMode::NonRecursive)
-            .map_err(|e| format!("cannot watch '{}': {e}", dir.display()))?;
-        let cards = dir.join("cards");
-        if cards.is_dir() {
-            debouncer
-                .watch(&cards, RecursiveMode::NonRecursive)
-                .map_err(|e| format!("cannot watch '{}': {e}", cards.display()))?;
-        }
+            .watch(&watched, RecursiveMode::Recursive)
+            .map_err(|e| format!("cannot watch '{}': {e}", watched.display()))?;
         Ok((
             Self {
                 _debouncer: debouncer,
@@ -61,32 +101,121 @@ impl Watcher {
     }
 }
 
+/// Whether a changed path belongs to the board: `board.md`, `cards/` or `cards/<name>.md`.
+fn is_board_path(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let mut parts = relative.components().map(|c| c.as_os_str());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(first), None, _) => first == "board.md" || first == "cards",
+        (Some(first), Some(name), None) => {
+            first == "cards" && Path::new(name).extension().is_some_and(|e| e == "md")
+        }
+        _ => false,
+    }
+}
+
+/// The host name (lower case, IPv6 keeps its brackets) of a `Host` header value, when the value
+/// is well formed: `name`, or `name:port`, or `[v6]`, or `[v6]:port`.
+fn host_name(host: &str) -> Option<String> {
+    let (name, port) = if host.starts_with('[') {
+        let end = host.find(']')?;
+        let (name, tail) = host.split_at(end + 1);
+        (name, tail.strip_prefix(':'))
+    } else {
+        match host.split_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        }
+    };
+    let port_ok = port.is_none_or(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    (port_ok && !name.is_empty()).then(|| name.to_ascii_lowercase())
+}
+
+/// Whether a request's `Host` header may be served: loopback names (any port), or an entry of
+/// `extra` (a host name, or `name:port`). This blocks DNS rebinding.
+#[must_use]
+pub fn host_allowed(host: &str, extra: &[String]) -> bool {
+    let Some(name) = host_name(host) else {
+        return false;
+    };
+    let full = host.to_ascii_lowercase();
+    matches!(name.as_str(), "localhost" | "127.0.0.1" | "[::1]")
+        || extra.iter().any(|e| *e == name || *e == full)
+}
+
+/// Parses a comma separated host list (as in `MARKBAN_ALLOWED_HOSTS`) into lower-case entries.
+fn parse_hosts(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect()
+}
+
+/// Extra allowed hosts from `MARKBAN_ALLOWED_HOSTS`, read once.
+fn extra_hosts() -> &'static [String] {
+    static EXTRA: OnceLock<Vec<String>> = OnceLock::new();
+    EXTRA.get_or_init(|| parse_hosts(&std::env::var("MARKBAN_ALLOWED_HOSTS").unwrap_or_default()))
+}
+
+/// Middleware: answers 403 unless the request's `Host` is allowed (see [`host_allowed`]).
+pub async fn host_guard(request: Request, next: Next) -> Response {
+    let host = request
+        .headers()
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| request.uri().authority().map(ToString::to_string));
+    if host.is_some_and(|h| host_allowed(&h, extra_hosts())) {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::FORBIDDEN,
+            "forbidden: unknown Host header; set MARKBAN_ALLOWED_HOSTS to allow it\n",
+        )
+            .into_response()
+    }
+}
+
+/// Returns the value in `cell`, creating it with `make` first when it is empty. A failure is
+/// returned but not stored, so the next call tries again.
+fn init_or_retry<T>(
+    cell: &OnceLock<T>,
+    make: impl FnOnce() -> Result<T, String>,
+) -> Result<&T, String> {
+    if let Some(value) = cell.get() {
+        return Ok(value);
+    }
+    // Losing a race just drops this value; the winner's stays.
+    let _ = cell.set(make()?);
+    cell.get().ok_or_else(|| "state is unavailable".to_string())
+}
+
 pub struct State {
     dir: PathBuf,
     rx: watch::Receiver<u64>,
     _watcher: Watcher,
 }
 
-static STATE: OnceLock<Result<State, String>> = OnceLock::new();
+static STATE: OnceLock<State> = OnceLock::new();
 
 /// The shared state; created on first use from `MARKBAN_BOARD` (default: current directory).
+/// A failed start is not cached: the next request tries again.
 ///
 /// # Errors
 /// A message when the watcher cannot start.
 pub fn state() -> Result<&'static State, String> {
-    STATE
-        .get_or_init(|| {
-            let dir =
-                std::env::var_os("MARKBAN_BOARD").map_or_else(|| PathBuf::from("."), PathBuf::from);
-            let (watcher, rx) = Watcher::start(&dir)?;
-            Ok(State {
-                dir,
-                rx,
-                _watcher: watcher,
-            })
+    init_or_retry(&STATE, || {
+        let dir =
+            std::env::var_os("MARKBAN_BOARD").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let (watcher, rx) = Watcher::start(&dir)?;
+        Ok(State {
+            dir,
+            rx,
+            _watcher: watcher,
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    })
 }
 
 fn failed_view(message: String) -> BoardView {
@@ -112,6 +241,39 @@ pub fn load_view(dir: &Path) -> BoardView {
     }
 }
 
+/// The name of the column that shows card `id`, or "Unsorted".
+fn column_name(board: &Board, id: &str) -> String {
+    view(board)
+        .columns
+        .into_iter()
+        .find(|c| c.cards.iter().any(|card| card.id == id))
+        .map_or_else(|| "Unsorted".to_string(), |c| c.name)
+}
+
+/// Loads one card of the board in `dir` with its description rendered to sanitised HTML.
+///
+/// # Errors
+/// A message when the board or the card cannot be read.
+pub fn load_card(dir: &Path, id: &str) -> Result<CardDetail, String> {
+    let (board, _) = markban_core::fs::load(dir).map_err(|e| e.to_string())?;
+    let board = board.ok_or_else(|| "board.md is missing or unusable".to_string())?;
+    let card = board
+        .cards
+        .get(id)
+        .ok_or_else(|| format!("no card with id '{id}'"))?;
+    let text = |key: &str| card.get(key).and_then(Result::ok).unwrap_or_default();
+    let column = column_name(&board, id);
+    let title = Some(text("title"))
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| id.to_string());
+    Ok(CardDetail {
+        id: id.to_string(),
+        title,
+        column,
+        html: render_markdown(&card.body),
+    })
+}
+
 impl State {
     #[must_use]
     pub fn board_view(&self) -> BoardView {
@@ -121,22 +283,7 @@ impl State {
     /// # Errors
     /// A message when the board or the card cannot be read.
     pub fn card(&self, id: &str) -> Result<CardDetail, String> {
-        let (board, _) = markban_core::fs::load(&self.dir).map_err(|e| e.to_string())?;
-        let board = board.ok_or_else(|| "board.md is missing or unusable".to_string())?;
-        let card = board
-            .cards
-            .get(id)
-            .ok_or_else(|| format!("no card with id '{id}'"))?;
-        let text = |key: &str| card.get(key).and_then(Result::ok).unwrap_or_default();
-        let title = Some(text("title"))
-            .filter(|t| !t.is_empty())
-            .unwrap_or_else(|| id.to_string());
-        Ok(CardDetail {
-            id: id.to_string(),
-            title,
-            column: text("column"),
-            html: render_markdown(&card.body),
-        })
+        load_card(&self.dir, id)
     }
 
     /// Waits until the revision differs from `since` (at most 25 s), then returns it with the board.
@@ -180,6 +327,167 @@ mod tests {
         assert!(html.contains("<h1>Title</h1>"), "{html}");
         assert!(html.contains("<li>a</li>"), "{html}");
         assert!(html.contains("href=\"https://example.com\""), "{html}");
+    }
+
+    #[test]
+    fn remote_images_are_dropped() {
+        for md in [
+            "![x](https://example.com/p.png)",
+            "<img src=\"//evil.example/p.png\">",
+            "<img src=\"/\\evil.example/p.png\">",
+            "<img src=\"data:image/png;base64,AAAA\">",
+            "<img src=\"HTTP://evil.example/p.png\">",
+        ] {
+            let html = render_markdown(md);
+            assert!(!html.contains("evil.example"), "{md}: {html}");
+            assert!(!html.contains("example.com"), "{md}: {html}");
+            assert!(!html.contains("data:"), "{md}: {html}");
+        }
+        let html = render_markdown("![x](pics/p.png)");
+        assert!(html.contains("src=\"pics/p.png\""), "{html}");
+    }
+
+    #[test]
+    fn task_lists_render_as_disabled_checkboxes() {
+        let html = render_markdown("- [x] done\n- [ ] open\n");
+        assert_eq!(html.matches("<input").count(), 2, "{html}");
+        assert_eq!(html.matches("type=\"checkbox\"").count(), 2, "{html}");
+        assert_eq!(html.matches("disabled").count(), 2, "{html}");
+        assert_eq!(html.matches("checked").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn raw_inputs_become_disabled_checkboxes_only() {
+        let html = render_markdown("<input type=\"text\" name=\"q\" value=\"v\" onfocus=\"x()\">");
+        assert!(html.contains("type=\"checkbox\""), "{html}");
+        assert!(html.contains("disabled"), "{html}");
+        assert!(!html.contains("text"), "{html}");
+        assert!(!html.contains("name="), "{html}");
+        assert!(!html.contains("onfocus"), "{html}");
+    }
+
+    #[test]
+    fn host_check_allows_loopback_only_by_default() {
+        for ok in [
+            "localhost",
+            "localhost:8080",
+            "LOCALHOST:3000",
+            "127.0.0.1",
+            "127.0.0.1:8080",
+            "[::1]",
+            "[::1]:8080",
+        ] {
+            assert!(host_allowed(ok, &[]), "{ok}");
+        }
+        for bad in [
+            "",
+            "evil.example",
+            "evil.example:8080",
+            "localhost.evil.example",
+            "127.0.0.1.evil.example",
+            "localhost:80:80",
+            "[::1",
+            "::1",
+        ] {
+            assert!(!host_allowed(bad, &[]), "{bad}");
+        }
+    }
+
+    #[test]
+    fn host_check_honours_the_extra_list() {
+        let extra = parse_hosts(" board.lan, Other.Example ,,");
+        assert!(host_allowed("board.lan", &extra));
+        assert!(host_allowed("board.lan:8080", &extra));
+        assert!(host_allowed("other.example:1", &extra));
+        assert!(!host_allowed("evil.example", &extra));
+    }
+
+    #[test]
+    fn failed_setup_is_retried_not_cached() {
+        let cell = OnceLock::new();
+        assert!(init_or_retry(&cell, || Err::<u32, _>("boom".to_string())).is_err());
+        assert_eq!(init_or_retry(&cell, || Ok(7)).copied(), Ok(7));
+        // Once set, the value stays and `make` is not called again.
+        assert_eq!(
+            init_or_retry(&cell, || Err("must not run".to_string())).copied(),
+            Ok(7)
+        );
+    }
+
+    #[test]
+    fn only_board_files_count_as_board_paths() {
+        let root = Path::new("/b");
+        for yes in ["/b/board.md", "/b/cards", "/b/cards/a.md"] {
+            assert!(is_board_path(root, Path::new(yes)), "{yes}");
+        }
+        for no in [
+            "/b",
+            "/b/notes.md",
+            "/b/cards/a.txt",
+            "/b/cards/sub/a.md",
+            "/b/.git/HEAD",
+            "/b/target/x.md",
+            "/elsewhere/board.md",
+        ] {
+            assert!(!is_board_path(root, Path::new(no)), "{no}");
+        }
+    }
+
+    #[test]
+    fn card_detail_shows_the_column_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("board.md"),
+            "---\nmarkban: 0.1\ncolumns:\n  - id: todo\n    name: To do\n---\n",
+        )
+        .expect("board");
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        std::fs::write(
+            dir.path().join("cards/a.md"),
+            "---\ntitle: A\ncolumn: todo\norder: 1000\n---\n",
+        )
+        .expect("a");
+        std::fs::write(
+            dir.path().join("cards/lost.md"),
+            "---\ntitle: L\ncolumn: gone\n---\n",
+        )
+        .expect("lost");
+        assert_eq!(load_card(dir.path(), "a").expect("a").column, "To do");
+        assert_eq!(load_card(dir.path(), "lost").expect("l").column, "Unsorted");
+    }
+
+    #[tokio::test]
+    async fn cards_dir_created_after_start_is_watched() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("board.md"), "---\nmarkban: 0.1\n---\n").expect("board");
+        let (_watcher, mut rx) = Watcher::start(dir.path()).expect("watcher");
+        let before = *rx.borrow();
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        let card = dir.path().join("cards/0001-a.md");
+        std::fs::write(&card, "---\ntitle: A\ncolumn: todo\n---\n").expect("card");
+        tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|rev| *rev != before))
+            .await
+            .expect("bumped after cards/ and a card appeared")
+            .expect("sender alive");
+        // Let the first burst settle, then edit: a watcher on the new directory must see it.
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        let settled = *rx.borrow();
+        std::fs::write(&card, "---\ntitle: B\ncolumn: todo\n---\n").expect("edit");
+        tokio::time::timeout(Duration::from_secs(5), rx.wait_for(|rev| *rev != settled))
+            .await
+            .expect("edit in the new cards/ seen")
+            .expect("sender alive");
+    }
+
+    #[tokio::test]
+    async fn unrelated_files_do_not_bump_revision() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("board.md"), "---\nmarkban: 0.1\n---\n").expect("board");
+        let (_watcher, rx) = Watcher::start(dir.path()).expect("watcher");
+        let before = *rx.borrow();
+        std::fs::write(dir.path().join("scratch.txt"), "x").expect("scratch");
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert_eq!(*rx.borrow(), before);
     }
 
     #[tokio::test]

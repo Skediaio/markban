@@ -272,7 +272,7 @@ fn ls_on_demo_board_is_exact() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         o.stdout,
-        "# Markban roadmap\n## Backlog (backlog) 1\n0003-board-ui  Read-only board viewer\n## Doing (doing) 1\n0002-parser  Core library and CLI\n## Done (done) 1\n0001-spec-draft  Write spec v0.1\n"
+        "# Markban roadmap\n## Backlog (backlog) 0\n## Doing (doing) 0\n## Done (done) 3\n0001-spec-draft  Write spec v0.1\n0002-parser  Core library and CLI\n0003-board-ui  Read-only board viewer\n"
     );
 }
 
@@ -283,7 +283,8 @@ fn ls_json_is_the_board_view() {
     let v: serde_json::Value = serde_json::from_str(&o.stdout).unwrap();
     assert_eq!(v["title"], "Markban roadmap");
     assert_eq!(v["columns"][0]["id"], "backlog");
-    assert_eq!(v["columns"][0]["cards"][0]["id"], "0003-board-ui");
+    assert_eq!(v["columns"][2]["id"], "done");
+    assert_eq!(v["columns"][2]["cards"][0]["id"], "0001-spec-draft");
 }
 
 #[test]
@@ -302,8 +303,62 @@ fn ls_shows_unsorted_and_diagnostics() {
         "{}",
         o.stdout
     );
-    assert!(o.stdout.contains("\n! cards/lost.md:"), "{}", o.stdout);
-    assert!(o.stdout.contains(" E007 "), "{}", o.stdout);
+    assert!(
+        o.stdout.ends_with("\n! 1 problem(s); run markban check\n"),
+        "{}",
+        o.stdout
+    );
+    assert!(!o.stdout.contains("E007"), "{}", o.stdout);
+    let json = mb(dir.path(), &["ls", "--json"]);
+    assert!(json.stdout.contains("E007"), "{}", json.stdout);
+}
+
+#[test]
+fn append_reads_from_stdin() {
+    let dir = init_board();
+    ok(dir.path(), &["add", "Task", "--id", "task", "-d", "Body"]);
+    let o = out(&bin()
+        .arg("-C")
+        .arg(dir.path())
+        .args(["edit", "task", "--append", "-"])
+        .write_stdin("From stdin\n")
+        .output()
+        .unwrap());
+    assert_eq!(o.code, 0, "{}", o.stderr);
+    assert_eq!(
+        ok(dir.path(), &["show", "task"]),
+        "task  Task\ncolumn: todo\n\nBody\nFrom stdin\n"
+    );
+}
+
+#[test]
+fn terminal_escapes_in_board_content_are_neutralised_in_text_mode() {
+    let dir = init_board();
+    std::fs::create_dir_all(dir.path().join("cards")).unwrap();
+    std::fs::write(
+        dir.path().join("cards/evil.md"),
+        "---\ntitle: Evil \u{1b}[31mred\u{9b}\ncolumn: todo\norder: 1000\n---\n\nbody \u{1b}]0;pwned\u{7}\tkept\n",
+    )
+    .unwrap();
+    for args in [&["ls"][..], &["show", "evil"], &["check"]] {
+        let o = mb(dir.path(), args);
+        assert!(
+            !o.stdout
+                .chars()
+                .any(|c| c.is_control() && c != '\n' && c != '\t'),
+            "{args:?}: {:?}",
+            o.stdout
+        );
+    }
+    let show = mb(dir.path(), &["show", "evil"]);
+    assert!(
+        show.stdout.contains("Evil \u{fffd}[31mred\u{fffd}"),
+        "{:?}",
+        show.stdout
+    );
+    assert!(show.stdout.contains("\tkept"), "{:?}", show.stdout);
+    let json = mb(dir.path(), &["show", "evil", "--json"]);
+    assert!(json.stdout.contains("\\u001b[31mred"), "{:?}", json.stdout);
 }
 
 #[test]

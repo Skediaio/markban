@@ -174,6 +174,19 @@ markban check
 ```
 
 Success prints the affected id only. An error is one line saying what is wrong and what is valid.
+`markban ls` prints at most one line about problems (`! N problem(s); run markban check`); `markban check`
+prints them all. Text output replaces control characters from board content (except newline and tab) with
+U+FFFD, so a board cannot inject terminal escape sequences; `--json` output is exact. `-d -` and
+`--append -` read the text from stdin.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Success (`check`: no errors; warnings are fine). |
+| 1 | Invalid input or the command was refused: fix the input. `check` also uses 1 when the board has errors. |
+| 2 | Usage error (unknown option, missing argument). |
+| 3 | Contention: another writer changed the board while the command ran. Nothing was written; retry. |
 
 ## Reserved for later versions
 

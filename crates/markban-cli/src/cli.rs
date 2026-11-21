@@ -77,7 +77,7 @@ pub enum Cmd {
         /// Replace the description with TEXT, or `-` to read it from stdin.
         #[arg(short, long, value_name = "TEXT")]
         description: Option<String>,
-        /// Append a line to the description.
+        /// Append a line to the description, or `-` to read it from stdin.
         #[arg(long, value_name = "TEXT")]
         append: Option<String>,
     },
@@ -97,7 +97,7 @@ pub enum Cmd {
         #[arg(value_name = "FILE", default_value = "-")]
         file: String,
     },
-    /// Report diagnostics; exit 1 when the board has errors.
+    /// Report all diagnostics; exit 1 when the board has errors.
     Check {
         /// Board directory (default: discovered like the other commands).
         dir: Option<PathBuf>,
