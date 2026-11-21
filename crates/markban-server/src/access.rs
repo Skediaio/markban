@@ -13,7 +13,7 @@
 //! `access.toml`:
 //!
 //! ```toml
-//! [users.maarten]
+//! [users.alice]
 //! token_sha256 = "<64 hex digits>"
 //! boards = ["*"]
 //! admin = true

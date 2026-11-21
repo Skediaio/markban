@@ -1065,7 +1065,7 @@ mod tests {
             r#"[{"cmd":"card.add","title":"A"},{"cmd":"column.add","name":"X"}]"#,
         )
         .unwrap();
-        let result = run_and_log(data.path(), "kuuno", "anna", &cmds, u64::MAX, || {
+        let result = run_and_log(data.path(), "acme", "anna", &cmds, u64::MAX, || {
             Err(RunError::PartiallyApplied {
                 written: vec!["cards/a.md".into()],
                 failed: "board.md".into(),
@@ -1074,7 +1074,7 @@ mod tests {
         });
         let error = result.err().unwrap();
         assert_eq!(error.body.code, 4);
-        let log = std::fs::read_to_string(access::log_path(data.path(), "kuuno")).unwrap();
+        let log = std::fs::read_to_string(access::log_path(data.path(), "acme")).unwrap();
         let lines: Vec<serde_json::Value> = log
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
@@ -1100,11 +1100,11 @@ mod tests {
             append: Some("short".into()),
             if_unchanged: None,
         };
-        run_and_log(data.path(), "kuuno", "anna", &[cmd], u64::MAX, || {
+        run_and_log(data.path(), "acme", "anna", &[cmd], u64::MAX, || {
             Ok(vec![markban_core::Outcome { id: "a".into() }])
         })
         .unwrap();
-        let log = std::fs::read_to_string(access::log_path(data.path(), "kuuno")).unwrap();
+        let log = std::fs::read_to_string(access::log_path(data.path(), "acme")).unwrap();
         let line: serde_json::Value = serde_json::from_str(log.trim()).unwrap();
         let description = line["cmd"]["description"].as_str().unwrap();
         assert!(

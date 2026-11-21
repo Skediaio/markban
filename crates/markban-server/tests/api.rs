@@ -40,7 +40,7 @@ fn send(
 #[test]
 fn missing_or_wrong_token_is_401_everywhere() {
     let f = Fixture::new();
-    let mut all = endpoints("kuuno");
+    let mut all = endpoints("acme");
     all.push(("GET", "/api/boards".into(), None));
     // Same token with its last character changed; pick a character that differs from the real one.
     let last = if f.admin.ends_with('0') { '1' } else { '0' };
@@ -57,7 +57,7 @@ fn missing_or_wrong_token_is_401_everywhere() {
             );
         }
     }
-    assert!(f.log("kuuno").is_empty());
+    assert!(f.log("acme").is_empty());
 }
 
 #[test]
@@ -105,9 +105,9 @@ fn removed_user_is_locked_out_without_a_restart() {
 fn unreadable_access_file_fails_closed() {
     let f = Fixture::new();
     // Warm any cache first: a later parse error must still refuse.
-    assert_eq!(f.get("/api/boards/kuuno", Some(&f.admin)).status, 200);
+    assert_eq!(f.get("/api/boards/acme", Some(&f.admin)).status, 200);
     std::fs::write(f.data.path().join("access.toml"), "garbage [[[").unwrap();
-    let r = f.get("/api/boards/kuuno", Some(&f.admin));
+    let r = f.get("/api/boards/acme", Some(&f.admin));
     assert_eq!(r.status, 500, "{}", r.body);
     assert!(!r.body.contains("garbage"), "{}", r.body);
 }
@@ -117,7 +117,7 @@ fn unreadable_access_file_fails_closed() {
 #[test]
 fn a_board_the_user_may_not_use_answers_exactly_like_a_missing_board() {
     let f = Fixture::new();
-    // Anna has `kuuno` only; `other` exists, `ghost` does not.
+    // Anna has `acme` only; `other` exists, `ghost` does not.
     for ((m1, hidden, b1), (_, missing, _)) in
         endpoints("other").into_iter().zip(endpoints("ghost"))
     {
@@ -144,11 +144,11 @@ fn board_list_shows_only_allowed_boards() {
     let f = Fixture::new();
     let anna = f.get("/api/boards", Some(&f.anna));
     assert_eq!(anna.status, 200);
-    assert_eq!(anna.body, r#"[{"id":"kuuno","title":"Board kuuno"}]"#);
+    assert_eq!(anna.body, r#"[{"id":"acme","title":"Board acme"}]"#);
     let admin = f.get("/api/boards", Some(&f.admin));
     assert_eq!(
         admin.body,
-        r#"[{"id":"kuuno","title":"Board kuuno"},{"id":"other","title":"Board other"}]"#
+        r#"[{"id":"acme","title":"Board acme"},{"id":"other","title":"Board other"}]"#
     );
 }
 
@@ -172,22 +172,22 @@ fn star_reaches_every_board_including_new_ones() {
 #[test]
 fn an_access_change_of_the_same_size_takes_effect_immediately() {
     let f = Fixture::new();
-    access::add_board(f.data.path(), "aaaaa", "A", &common::cols()).unwrap();
-    assert_eq!(f.get("/api/boards/kuuno", Some(&f.anna)).status, 200);
+    access::add_board(f.data.path(), "aaaa", "A", &common::cols()).unwrap();
+    assert_eq!(f.get("/api/boards/acme", Some(&f.anna)).status, 200);
     let before = std::fs::read(f.data.path().join("access.toml")).unwrap();
-    // `kuuno` and `aaaaa` have the same length, so the file keeps its size.
-    access::set_boards(f.data.path(), "anna", &["aaaaa".into()]).unwrap();
+    // `acme` and `aaaa` have the same length, so the file keeps its size.
+    access::set_boards(f.data.path(), "anna", &["aaaa".into()]).unwrap();
     let after = std::fs::read(f.data.path().join("access.toml")).unwrap();
     assert_eq!(before.len(), after.len());
-    assert_eq!(f.get("/api/boards/kuuno", Some(&f.anna)).status, 404);
-    assert_eq!(f.get("/api/boards/aaaaa", Some(&f.anna)).status, 200);
+    assert_eq!(f.get("/api/boards/acme", Some(&f.anna)).status, 404);
+    assert_eq!(f.get("/api/boards/aaaa", Some(&f.anna)).status, 200);
 }
 
 #[test]
 fn granting_a_board_takes_effect_immediately() {
     let f = Fixture::new();
     assert_eq!(f.get("/api/boards/other", Some(&f.anna)).status, 404);
-    access::set_boards(f.data.path(), "anna", &["kuuno".into(), "other".into()]).unwrap();
+    access::set_boards(f.data.path(), "anna", &["acme".into(), "other".into()]).unwrap();
     assert_eq!(f.get("/api/boards/other", Some(&f.anna)).status, 200);
 }
 
@@ -202,24 +202,24 @@ fn hostile_board_and_card_ids_are_404() {
         "/api/boards/..",
         "/api/boards/%2e%2e",
         "/api/boards/..%2f..",
-        "/api/boards/kuuno%2f..%2fother",
-        "/api/boards/kuuno%2F..%2Fother",
-        "/api/boards/KUUNO",
-        "/api/boards/kuuno%00",
-        "/api/boards/kuuno%20",
-        "/api/boards/-kuuno",
+        "/api/boards/acme%2f..%2fother",
+        "/api/boards/acme%2F..%2Fother",
+        "/api/boards/ACME",
+        "/api/boards/acme%00",
+        "/api/boards/acme%20",
+        "/api/boards/-acme",
         "/api/boards/secret.md",
         "/api/boards/%ff",
-        "/api/boards/kuuno/cards/..",
-        "/api/boards/kuuno/cards/..%2fboard",
-        "/api/boards/kuuno/cards/%2e%2e%2f%2e%2e%2faccess",
-        "/api/boards/kuuno/cards/..%5c..%5caccess",
-        "/api/boards/kuuno/cards/%ff",
-        "/api/boards/kuuno/../other",
-        "/api/boards/kuuno/cards/a/b",
+        "/api/boards/acme/cards/..",
+        "/api/boards/acme/cards/..%2fboard",
+        "/api/boards/acme/cards/%2e%2e%2f%2e%2e%2faccess",
+        "/api/boards/acme/cards/..%5c..%5caccess",
+        "/api/boards/acme/cards/%ff",
+        "/api/boards/acme/../other",
+        "/api/boards/acme/cards/a/b",
         "/api/../access.toml",
         "/access.toml",
-        "/boards/kuuno/board.md",
+        "/boards/acme/board.md",
     ] {
         for token in [&f.anna, &f.admin] {
             let r = f.get(path, Some(token));
@@ -268,7 +268,7 @@ fn unknown_host_header_is_refused() {
 #[test]
 fn allowed_hosts_are_configurable() {
     let data = tempfile::TempDir::new().unwrap();
-    let token = access::init(data.path(), "maarten").unwrap();
+    let token = access::init(data.path(), "alice").unwrap();
     let mut config = markban_server::Config::new(data.path().to_path_buf());
     config.allowed_hosts = markban_server::parse_hosts("board.example");
     let addr = markban_server::spawn(config, "127.0.0.1:0").unwrap();
@@ -310,29 +310,29 @@ fn allowed_hosts_are_configurable() {
 fn view_and_card_match_the_core() {
     let f = Fixture::new();
     f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"First","description":"Body"}]"#,
     );
-    let r = f.get("/api/boards/kuuno", Some(&f.anna));
+    let r = f.get("/api/boards/acme", Some(&f.anna));
     assert_eq!(r.status, 200);
     assert!(
         r.headers.contains("content-type: application/json"),
         "{}",
         r.headers
     );
-    let (board, diagnostics) = markban_core::fs::load(&f.board("kuuno")).unwrap();
+    let (board, diagnostics) = markban_core::fs::load(&f.board("acme")).unwrap();
     let board = board.unwrap();
     let mut expected = markban_core::view(&board);
     expected.diagnostics = diagnostics;
     assert_eq!(r.body, serde_json::to_string(&expected).unwrap());
 
-    let r = f.get("/api/boards/kuuno/cards/first", Some(&f.anna));
+    let r = f.get("/api/boards/acme/cards/first", Some(&f.anna));
     assert_eq!(r.status, 200);
     let card = markban_core::view::card(&board, "first").unwrap();
     assert_eq!(r.body, serde_json::to_string(&card).unwrap());
 
-    let r = f.get("/api/boards/kuuno/cards/nope", Some(&f.anna));
+    let r = f.get("/api/boards/acme/cards/nope", Some(&f.anna));
     assert_eq!(r.status, 404);
     assert_eq!(
         r.json()["error"],
@@ -346,13 +346,13 @@ fn view_and_card_match_the_core() {
 fn run_applies_and_logs_one_line_per_command() {
     let f = Fixture::new();
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"First"},{"cmd":"card.move","id":"first","column":"Done"}]"#,
     );
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.body, r#"{"outcomes":[{"id":"first"},{"id":"first"}]}"#);
-    let log = f.log("kuuno");
+    let log = f.log("acme");
     let lines: Vec<serde_json::Value> = log
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -374,20 +374,20 @@ fn run_applies_and_logs_one_line_per_command() {
     );
 
     // The log endpoint returns the same entries, newest last, limited.
-    let all = f.get("/api/boards/kuuno/log", Some(&f.anna));
+    let all = f.get("/api/boards/acme/log", Some(&f.anna));
     assert_eq!(all.status, 200);
     assert_eq!(
         all.body,
         format!("[{}]", log.lines().collect::<Vec<_>>().join(","))
     );
-    let last = f.get("/api/boards/kuuno/log?limit=1", Some(&f.anna));
+    let last = f.get("/api/boards/acme/log?limit=1", Some(&f.anna));
     assert_eq!(last.body, format!("[{}]", log.lines().nth(1).unwrap()));
     assert_eq!(
-        f.get("/api/boards/kuuno/log?limit=0", Some(&f.anna)).body,
+        f.get("/api/boards/acme/log?limit=0", Some(&f.anna)).body,
         "[]"
     );
     for bad in ["?limit=x", "?limit=-1", "?limit=99999999999999999999999"] {
-        let r = f.get(&format!("/api/boards/kuuno/log{bad}"), Some(&f.anna));
+        let r = f.get(&format!("/api/boards/acme/log{bad}"), Some(&f.anna));
         assert_eq!(r.status, 400, "{bad}: {}", r.body);
     }
 }
@@ -395,9 +395,9 @@ fn run_applies_and_logs_one_line_per_command() {
 #[test]
 fn a_failing_batch_writes_nothing_and_logs_nothing() {
     let f = Fixture::new();
-    let before = board_files(&f.board("kuuno"));
+    let before = board_files(&f.board("acme"));
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"First"},{"cmd":"card.move","id":"ghost","column":"Done"}]"#,
     );
@@ -409,46 +409,46 @@ fn a_failing_batch_writes_nothing_and_logs_nothing() {
         v["error"],
         "no card 'ghost'; card ids are the file names in cards/ without .md"
     );
-    assert_eq!(board_files(&f.board("kuuno")), before);
-    assert!(f.log("kuuno").is_empty());
+    assert_eq!(board_files(&f.board("acme")), before);
+    assert!(f.log("acme").is_empty());
 }
 
 #[test]
 fn stale_if_unchanged_is_409_with_code_3() {
     let f = Fixture::new();
-    f.post("/api/boards/kuuno/run", Some(&f.anna), ADD);
-    let card = f.get("/api/boards/kuuno/cards/first", Some(&f.anna)).json();
+    f.post("/api/boards/acme/run", Some(&f.anna), ADD);
+    let card = f.get("/api/boards/acme/cards/first", Some(&f.anna)).json();
     let sha = card["sha256"].as_str().unwrap().to_string();
     f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.admin),
         r#"[{"cmd":"card.edit","id":"first","append":"admin was here"}]"#,
     );
     let body =
         format!(r#"[{{"cmd":"card.edit","id":"first","title":"Mine","if_unchanged":"{sha}"}}]"#);
-    let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &body);
+    let r = f.post("/api/boards/acme/run", Some(&f.anna), &body);
     assert_eq!(r.status, 409, "{}", r.body);
     assert_eq!(r.json()["code"], 3);
-    assert_eq!(f.log("kuuno").lines().count(), 2);
+    assert_eq!(f.log("acme").lines().count(), 2);
 }
 
 #[test]
 fn board_init_through_the_api_cannot_replace_a_board() {
     let f = Fixture::new();
-    let before = board_files(&f.board("kuuno"));
+    let before = board_files(&f.board("acme"));
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"board.init","title":"Mine","columns":["X"]}]"#,
     );
     assert_eq!(r.status, 400, "{}", r.body);
-    assert_eq!(board_files(&f.board("kuuno")), before);
+    assert_eq!(board_files(&f.board("acme")), before);
 }
 
 #[test]
 fn concurrent_requests_serialise_without_lost_updates() {
     let f = Fixture::new();
-    f.post("/api/boards/kuuno/run", Some(&f.anna), ADD);
+    f.post("/api/boards/acme/run", Some(&f.anna), ADD);
     let per_thread = 15;
     std::thread::scope(|scope| {
         for (who, token) in [("a", &f.anna), ("m", &f.admin)] {
@@ -458,13 +458,13 @@ fn concurrent_requests_serialise_without_lost_updates() {
                     let body = format!(
                         r#"[{{"cmd":"card.edit","id":"first","append":"{who}{i}"}},{{"cmd":"card.add","title":"{who} {i}"}}]"#
                     );
-                    let r = f.post("/api/boards/kuuno/run", Some(token), &body);
+                    let r = f.post("/api/boards/acme/run", Some(token), &body);
                     assert_eq!(r.status, 200, "{}", r.body);
                 }
             });
         }
     });
-    let card = std::fs::read_to_string(f.board("kuuno").join("cards/first.md")).unwrap();
+    let card = std::fs::read_to_string(f.board("acme").join("cards/first.md")).unwrap();
     for who in ["a", "m"] {
         for i in 0..per_thread {
             assert!(
@@ -472,21 +472,16 @@ fn concurrent_requests_serialise_without_lost_updates() {
                 "lost {who}{i}:\n{card}"
             );
             assert!(
-                f.board("kuuno")
+                f.board("acme")
                     .join(format!("cards/{who}-{i}.md"))
                     .is_file()
             );
         }
     }
-    assert_eq!(f.log("kuuno").lines().count(), 1 + 2 * 2 * per_thread);
+    assert_eq!(f.log("acme").lines().count(), 1 + 2 * 2 * per_thread);
     assert!(
-        markban_core::check(
-            &markban_core::fs::load(&f.board("kuuno"))
-                .unwrap()
-                .0
-                .unwrap()
-        )
-        .is_empty()
+        markban_core::check(&markban_core::fs::load(&f.board("acme")).unwrap().0.unwrap())
+            .is_empty()
     );
 }
 
@@ -499,10 +494,10 @@ fn oversized_body_is_413() {
         r#"[{{"cmd":"card.add","title":"x","description":"{}"}}]"#,
         "a".repeat(2 * 1024 * 1024)
     );
-    let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &big);
+    let r = f.post("/api/boards/acme/run", Some(&f.anna), &big);
     assert_eq!(r.status, 413, "{}", &r.body[..r.body.len().min(200)]);
     assert_eq!(r.json()["code"], 1);
-    assert!(f.log("kuuno").is_empty());
+    assert!(f.log("acme").is_empty());
 }
 
 #[test]
@@ -513,7 +508,7 @@ fn too_many_commands_is_400() {
         "[{}]",
         vec![one; markban_server::MAX_COMMANDS + 1].join(",")
     );
-    let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &body);
+    let r = f.post("/api/boards/acme/run", Some(&f.anna), &body);
     assert_eq!(r.status, 400, "{}", r.body);
     assert!(
         r.json()["error"].as_str().unwrap().contains("at most"),
@@ -541,7 +536,7 @@ fn garbage_bodies_get_one_line_json_errors() {
         "[\"\\ud800\"]",
     ];
     for body in bodies {
-        let r = f.post("/api/boards/kuuno/run", Some(&f.anna), body);
+        let r = f.post("/api/boards/acme/run", Some(&f.anna), body);
         assert!(
             matches!(r.status, 200 | 400),
             "{body:.40}: {} {}",
@@ -559,7 +554,7 @@ fn garbage_bodies_get_one_line_json_errors() {
     let r = request(
         f.addr,
         "POST",
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         Some(&[0xff, 0xfe]),
         None,
@@ -589,7 +584,7 @@ fn adversarial_commands_never_kill_the_server() {
             format!(r#"{{"cmd":"column.remove","column":{w},"move_to":{w}}}"#),
             format!(r#"{{"cmd":"board.init","title":{w},"columns":[{w}]}}"#),
         ] {
-            let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &format!("[{cmd}]"));
+            let r = f.post("/api/boards/acme/run", Some(&f.anna), &format!("[{cmd}]"));
             assert!(
                 matches!(r.status, 200 | 400 | 409),
                 "{cmd}: {} {}",
@@ -600,7 +595,7 @@ fn adversarial_commands_never_kill_the_server() {
         }
     }
     assert!(sent > 50);
-    let (board, _) = markban_core::fs::load(&f.board("kuuno")).unwrap();
+    let (board, _) = markban_core::fs::load(&f.board("acme")).unwrap();
     assert!(board.is_some());
     // Nothing escaped the board directory.
     let mut top: Vec<String> = std::fs::read_dir(f.data.path())
@@ -614,7 +609,7 @@ fn adversarial_commands_never_kill_the_server() {
 #[test]
 fn unknown_endpoints_are_json_404() {
     let f = Fixture::new();
-    for path in ["/", "/api", "/api/nope", "/api/boards/kuuno/cards"] {
+    for path in ["/", "/api", "/api/nope", "/api/boards/acme/cards"] {
         let r = f.get(path, Some(&f.admin));
         assert_eq!(r.status, 404, "{path}");
         assert_eq!(r.json()["code"], 1);

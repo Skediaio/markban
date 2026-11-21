@@ -37,7 +37,7 @@ fn answer(stream: &mut TcpStream, wait: Duration) -> Option<String> {
 
 fn post_head(f: &Fixture, token: Option<&str>, length: usize) -> String {
     let mut head = format!(
-        "POST /api/boards/kuuno/run HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n",
+        "POST /api/boards/acme/run HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {length}\r\n",
         f.addr
     );
     if let Some(token) = token {
@@ -61,17 +61,17 @@ fn the_log_rotates_at_its_size_cap_and_keeps_one_old_file() {
     let f = Fixture::with(|c| c.limits.log_rotate_bytes = 2048);
     for i in 0..60 {
         let body = format!(r#"[{{"cmd":"card.add","title":"Card number {i}"}}]"#);
-        let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &body);
+        let r = f.post("/api/boards/acme/run", Some(&f.anna), &body);
         assert_eq!(r.status, 200, "{}", r.body);
     }
     let log = f.data.path().join("log");
-    let current = std::fs::metadata(log.join("kuuno.jsonl")).unwrap().len();
-    let old = std::fs::metadata(log.join("kuuno.jsonl.1")).unwrap().len();
+    let current = std::fs::metadata(log.join("acme.jsonl")).unwrap().len();
+    let old = std::fs::metadata(log.join("acme.jsonl.1")).unwrap().len();
     assert!(current <= 2048 + 200, "{current}");
     assert!((2048..2048 + 200).contains(&old), "{old}");
-    assert!(!log.join("kuuno.jsonl.2").exists());
+    assert!(!log.join("acme.jsonl.2").exists());
     // The endpoint reads across the rotation: the newest entries, in order, no gap.
-    let r = f.get("/api/boards/kuuno/log?limit=20", Some(&f.anna));
+    let r = f.get("/api/boards/acme/log?limit=20", Some(&f.anna));
     let entries: Vec<serde_json::Value> = serde_json::from_str(&r.body).unwrap();
     assert_eq!(entries.len(), 20);
     let ids: Vec<&str> = entries
@@ -85,7 +85,7 @@ fn the_log_rotates_at_its_size_cap_and_keeps_one_old_file() {
 #[test]
 fn the_log_endpoint_reads_the_tail_of_a_large_log() {
     let f = Fixture::new();
-    let path = f.data.path().join("log/kuuno.jsonl");
+    let path = f.data.path().join("log/acme.jsonl");
     let mut text = String::new();
     // A long valid line, garbage and a torn last line around ordinary entries.
     text.push_str(&format!(
@@ -101,7 +101,7 @@ fn the_log_endpoint_reads_the_tail_of_a_large_log() {
     text.push_str("{\"outcome\":\"torn");
     std::fs::write(&path, &text).unwrap();
     let get = |q: &str| {
-        let r = f.get(&format!("/api/boards/kuuno/log{q}"), Some(&f.anna));
+        let r = f.get(&format!("/api/boards/acme/log{q}"), Some(&f.anna));
         assert_eq!(r.status, 200, "{}", r.body);
         serde_json::from_str::<Vec<serde_json::Value>>(&r.body).unwrap()
     };
@@ -135,13 +135,13 @@ fn large_text_is_truncated_in_the_log_but_not_on_the_board() {
     let f = Fixture::new();
     let long = "d".repeat(10_000);
     let body = format!(r#"[{{"cmd":"card.add","title":"Big","description":"{long}"}}]"#);
-    let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &body);
+    let r = f.post("/api/boards/acme/run", Some(&f.anna), &body);
     assert_eq!(r.status, 200, "{}", r.body);
-    let line = &log_lines(&f, "kuuno")[0];
+    let line = &log_lines(&f, "acme")[0];
     let logged = line["cmd"]["description"].as_str().unwrap();
     assert!(logged.len() < 2200, "{}", logged.len());
     assert!(logged.ends_with("…(truncated, 10000 bytes)"), "{logged}");
-    let card = std::fs::read_to_string(f.board("kuuno").join("cards/big.md")).unwrap();
+    let card = std::fs::read_to_string(f.board("acme").join("cards/big.md")).unwrap();
     assert!(card.contains(&long));
 }
 
@@ -149,15 +149,15 @@ fn large_text_is_truncated_in_the_log_but_not_on_the_board() {
 fn a_failed_log_write_still_answers_success_and_says_so() {
     let f = Fixture::new();
     // A directory where the log file should be: no one can append to it.
-    std::fs::create_dir_all(f.data.path().join("log/kuuno.jsonl")).unwrap();
+    std::fs::create_dir_all(f.data.path().join("log/acme.jsonl")).unwrap();
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"First"}]"#,
     );
     assert_eq!(r.status, 200, "{}", r.body);
     assert_eq!(r.body, r#"{"outcomes":[{"id":"first"}],"log":"failed"}"#);
-    assert!(f.board("kuuno").join("cards/first.md").is_file());
+    assert!(f.board("acme").join("cards/first.md").is_file());
 }
 
 #[cfg(unix)]
@@ -167,7 +167,7 @@ fn log_files_and_a_recreated_log_directory_are_private() {
     let f = Fixture::new();
     std::fs::remove_dir(f.data.path().join("log")).unwrap();
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"First"}]"#,
     );
@@ -180,7 +180,7 @@ fn log_files_and_a_recreated_log_directory_are_private() {
             & 0o777
     };
     assert_eq!(mode("log"), 0o700);
-    assert_eq!(mode("log/kuuno.jsonl"), 0o600);
+    assert_eq!(mode("log/acme.jsonl"), 0o600);
 }
 
 // ---- 2. authentication before the body, concurrency and timeouts ----
@@ -207,7 +207,7 @@ fn a_request_that_never_finishes_its_body_times_out() {
     assert!(start.elapsed() < Duration::from_secs(4));
     assert!(reply.starts_with("HTTP/1.1 503"), "{reply}");
     assert!(reply.contains(r#""code":4"#), "{reply}");
-    assert!(f.log("kuuno").is_empty());
+    assert!(f.log("acme").is_empty());
 }
 
 #[test]
@@ -239,12 +239,12 @@ fn requests_over_the_concurrency_limit_are_503_at_once() {
 #[test]
 fn many_runs_on_one_board_do_not_stall_another_board() {
     let f = Fixture::with(|c| c.limits.max_blocking = 4);
-    // Hold board kuuno's lock, as another markban process would, so every run on it waits.
+    // Hold board acme's lock, as another markban process would, so every run on it waits.
     let lock = std::fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(f.board("kuuno").join(".markban.lock"))
+        .open(f.board("acme").join(".markban.lock"))
         .unwrap();
     lock.lock().unwrap();
     std::thread::scope(|scope| {
@@ -252,7 +252,7 @@ fn many_runs_on_one_board_do_not_stall_another_board() {
             let f = &f;
             scope.spawn(move || {
                 let body = format!(r#"[{{"cmd":"card.add","title":"Card {i}"}}]"#);
-                let r = f.post("/api/boards/kuuno/run", Some(&f.anna), &body);
+                let r = f.post("/api/boards/acme/run", Some(&f.anna), &body);
                 assert!(matches!(r.status, 200 | 409 | 503), "{}", r.body);
             });
         }
@@ -276,7 +276,7 @@ fn a_run_past_the_card_limit_is_refused_and_writes_nothing() {
     let f = Fixture::with(|c| c.limits.max_cards = 3);
     let add = |t: &str| {
         f.post(
-            "/api/boards/kuuno/run",
+            "/api/boards/acme/run",
             Some(&f.anna),
             &format!(r#"[{{"cmd":"card.add","title":"{t}"}}]"#),
         )
@@ -284,7 +284,7 @@ fn a_run_past_the_card_limit_is_refused_and_writes_nothing() {
     for t in ["One", "Two", "Three"] {
         assert_eq!(add(t).status, 200);
     }
-    let before = board_files(&f.board("kuuno"));
+    let before = board_files(&f.board("acme"));
     let r = add("Four");
     assert_eq!(r.status, 400, "{}", r.body);
     let v = r.json();
@@ -292,11 +292,11 @@ fn a_run_past_the_card_limit_is_refused_and_writes_nothing() {
     let msg = v["error"].as_str().unwrap();
     assert!(msg.contains("at most 3 cards"), "{msg}");
     assert!(!msg.contains('\n'));
-    assert_eq!(board_files(&f.board("kuuno")), before);
-    assert_eq!(f.log("kuuno").lines().count(), 3);
+    assert_eq!(board_files(&f.board("acme")), before);
+    assert_eq!(f.log("acme").lines().count(), 3);
     // Shrinking is always allowed.
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.remove","id":"one"}]"#,
     );
@@ -307,7 +307,7 @@ fn a_run_past_the_card_limit_is_refused_and_writes_nothing() {
 fn a_card_file_past_the_size_limit_is_refused() {
     let f = Fixture::with(|c| c.limits.max_card_bytes = 1024);
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         &format!(
             r#"[{{"cmd":"card.add","title":"Big","description":"{}"}}]"#,
@@ -324,17 +324,17 @@ fn a_card_file_past_the_size_limit_is_refused() {
         "{}",
         r.body
     );
-    assert!(!f.board("kuuno").join("cards/big.md").exists());
+    assert!(!f.board("acme").join("cards/big.md").exists());
     // Growing an existing card past the limit by appending is refused too.
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         r#"[{"cmd":"card.add","title":"Small"}]"#,
     );
     assert_eq!(r.status, 200);
-    let before = board_files(&f.board("kuuno"));
+    let before = board_files(&f.board("acme"));
     let r = f.post(
-        "/api/boards/kuuno/run",
+        "/api/boards/acme/run",
         Some(&f.anna),
         &format!(
             r#"[{{"cmd":"card.edit","id":"small","append":"{}"}}]"#,
@@ -342,7 +342,7 @@ fn a_card_file_past_the_size_limit_is_refused() {
         ),
     );
     assert_eq!(r.status, 400, "{}", r.body);
-    assert_eq!(board_files(&f.board("kuuno")), before);
+    assert_eq!(board_files(&f.board("acme")), before);
 }
 
 // ---- 11. the board list ----
@@ -352,13 +352,13 @@ fn the_board_list_skips_boards_the_user_may_not_use() {
     let f = Fixture::new();
     let ids: Vec<String> = markban_server::access::list_boards_where(f.data.path(), |id| {
         assert_ne!(id, "other-never-read");
-        id == "kuuno"
+        id == "acme"
     })
     .unwrap()
     .into_iter()
     .map(|(id, _)| id)
     .collect();
-    assert_eq!(ids, ["kuuno"]);
+    assert_eq!(ids, ["acme"]);
 }
 
 // ---- 12. connections ----

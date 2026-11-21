@@ -44,7 +44,7 @@ fn healthz_ignores_the_host_list_and_the_concurrency_limit() {
     let mut held = TcpStream::connect(f.addr).unwrap();
     held.write_all(
         format!(
-            "POST /api/boards/kuuno/run HTTP/1.1\r\nHost: board.example\r\nAuthorization: Bearer {}\r\nContent-Length: 50\r\n\r\n",
+            "POST /api/boards/acme/run HTTP/1.1\r\nHost: board.example\r\nAuthorization: Bearer {}\r\nContent-Length: 50\r\n\r\n",
             f.anna
         )
         .as_bytes(),

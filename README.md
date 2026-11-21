@@ -61,11 +61,11 @@ logged. Agents keep using the same CLI by pointing it at the server:
 
 ```sh
 markban server init /srv/markban            # prints the first admin token once
-markban server --data /srv/markban board add kuuno "Kuuno" Todo Doing Done
-markban server --data /srv/markban user add designer-anna --boards kuuno   # prints her token once
+markban server --data /srv/markban board add acme "Acme" Todo Doing Done
+markban server --data /srv/markban user add designer-anna --boards acme   # prints her token once
 markban serve --data /srv/markban           # http://127.0.0.1:7171
 
-export MARKBAN_URL=http://127.0.0.1:7171 MARKBAN_TOKEN=mb_... MARKBAN_BOARD=kuuno
+export MARKBAN_URL=http://127.0.0.1:7171 MARKBAN_TOKEN=mb_... MARKBAN_BOARD=acme
 markban ls
 markban add "Draft the landing page" -c Doing
 markban log -n 5

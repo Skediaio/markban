@@ -236,13 +236,13 @@ On Unix the tools create the data directory, `boards/`, `log/` and `removed/` wi
 **Access.** `access.toml` lists users:
 
 ```toml
-[users.maarten]
+[users.alice]
 token_sha256 = "<64 hex digits>"
 boards = ["*"]          # every board
 admin = true            # reserved for administration from the browser
 [users.designer-anna]
 token_sha256 = "<64 hex digits>"
-boards = ["kuuno"]
+boards = ["acme"]
 ```
 
 A token is 32 random bytes (`mb_` and 64 hex digits), shown once and stored only as its SHA-256; hashes are

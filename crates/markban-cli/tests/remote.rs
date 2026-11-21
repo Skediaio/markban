@@ -46,8 +46,8 @@ fn out(cmd: &mut Command, stdin: Option<&str>) -> Out {
     }
 }
 
-/// A data directory with board `kuuno` (served) and users `maarten` (admin, `*`) and `anna`
-/// (`kuuno` only), plus a board `other` that anna may not use.
+/// A data directory with board `acme` (served) and users `alice` (admin, `*`) and `anna`
+/// (`acme` only), plus a board `other` that anna may not use.
 struct Server {
     data: TempDir,
     url: String,
@@ -59,11 +59,11 @@ const COLS: [&str; 3] = ["Todo", "Doing", "Done"];
 
 fn server() -> Server {
     let data = TempDir::new().unwrap();
-    let admin = access::init(data.path(), "maarten").unwrap();
+    let admin = access::init(data.path(), "alice").unwrap();
     let cols: Vec<String> = COLS.map(String::from).to_vec();
-    access::add_board(data.path(), "kuuno", "Kuuno", &cols).unwrap();
+    access::add_board(data.path(), "acme", "Acme", &cols).unwrap();
     access::add_board(data.path(), "other", "Other", &cols).unwrap();
-    let anna = access::add_user(data.path(), "anna", &["kuuno".into()], false).unwrap();
+    let anna = access::add_user(data.path(), "anna", &["acme".into()], false).unwrap();
     let addr =
         markban_server::spawn(Config::new(data.path().to_path_buf()), "127.0.0.1:0").unwrap();
     Server {
@@ -114,13 +114,10 @@ fn board_files(dir: &Path) -> Vec<(String, Vec<u8>)> {
 fn remote_and_local_give_identical_output_exit_codes_and_files() {
     let s = server();
     let local_dir = TempDir::new().unwrap();
-    let mut init = vec!["init", "Kuuno"];
+    let mut init = vec!["init", "Acme"];
     init.extend(COLS);
     assert_eq!(local(local_dir.path(), &init, None).code, 0);
-    assert_eq!(
-        board_files(local_dir.path()),
-        board_files(&s.board("kuuno"))
-    );
+    assert_eq!(board_files(local_dir.path()), board_files(&s.board("acme")));
 
     let script = "# a script\n{\"cmd\":\"card.add\",\"title\":\"Scripted\",\"column\":\"Doing\"}\n\n{\"cmd\":\"card.move\",\"id\":\"scripted\",\"top\":true}\n";
     let bad_script = "{\"cmd\":\"card.add\",\"title\":\"Ok\"}\n{\"cmd\":\"card.move\",\"id\":\"ghost\",\"column\":\"Done\"}\n";
@@ -182,7 +179,7 @@ fn remote_and_local_give_identical_output_exit_codes_and_files() {
     let mut codes = Vec::new();
     for (args, stdin) in &steps {
         let l = local(local_dir.path(), args, *stdin);
-        let r = s.remote(&s.anna, Some("kuuno"), args, *stdin);
+        let r = s.remote(&s.anna, Some("acme"), args, *stdin);
         assert_eq!(l, r, "{args:?}");
         codes.push(l.code);
     }
@@ -191,10 +188,7 @@ fn remote_and_local_give_identical_output_exit_codes_and_files() {
         codes.contains(&0) && codes.contains(&1) && codes.contains(&3),
         "{codes:?}"
     );
-    assert_eq!(
-        board_files(local_dir.path()),
-        board_files(&s.board("kuuno"))
-    );
+    assert_eq!(board_files(local_dir.path()), board_files(&s.board("acme")));
 
     // A matching hash edits, through both.
     let sha = |o: Out| -> String {
@@ -202,7 +196,7 @@ fn remote_and_local_give_identical_output_exit_codes_and_files() {
         v["sha256"].as_str().unwrap().to_string()
     };
     let local_sha = sha(local(local_dir.path(), &["show", "first", "--json"], None));
-    let remote_sha = sha(s.remote(&s.anna, Some("kuuno"), &["show", "first", "--json"], None));
+    let remote_sha = sha(s.remote(&s.anna, Some("acme"), &["show", "first", "--json"], None));
     assert_eq!(local_sha, remote_sha);
     let args = [
         "edit",
@@ -214,12 +208,9 @@ fn remote_and_local_give_identical_output_exit_codes_and_files() {
     ];
     assert_eq!(
         local(local_dir.path(), &args, None),
-        s.remote(&s.anna, Some("kuuno"), &args, None)
+        s.remote(&s.anna, Some("acme"), &args, None)
     );
-    assert_eq!(
-        board_files(local_dir.path()),
-        board_files(&s.board("kuuno"))
-    );
+    assert_eq!(board_files(local_dir.path()), board_files(&s.board("acme")));
 }
 
 #[test]
@@ -227,13 +218,13 @@ fn board_flag_overrides_the_environment() {
     let s = server();
     let o = s.remote(
         &s.admin,
-        Some("kuuno"),
+        Some("acme"),
         &["-b", "other", "add", "Here"],
         None,
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert!(s.board("other").join("cards/here.md").is_file());
-    assert!(!s.board("kuuno").join("cards/here.md").exists());
+    assert!(!s.board("acme").join("cards/here.md").exists());
 }
 
 #[test]
@@ -246,7 +237,7 @@ fn remote_without_a_board_says_how_to_pick_one() {
         "{}",
         o.stderr
     );
-    for bad in ["../other", "Kuuno", "a/b"] {
+    for bad in ["../other", "Acme", "a/b"] {
         let o = s.remote(&s.anna, Some(bad), &["ls"], None);
         assert_eq!(o.code, 1, "{bad}");
         assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);
@@ -276,7 +267,7 @@ fn hidden_board_reads_like_a_missing_one() {
 fn bad_token_is_one_line_and_never_echoed() {
     let s = server();
     let token = "mb_this-is-not-a-valid-token-value";
-    let o = s.remote(token, Some("kuuno"), &["ls"], None);
+    let o = s.remote(token, Some("acme"), &["ls"], None);
     assert_eq!(o.code, 1);
     assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);
     assert!(o.stderr.contains("token"), "{}", o.stderr);
@@ -284,7 +275,7 @@ fn bad_token_is_one_line_and_never_echoed() {
     // Passed as a flag, it is not echoed either.
     let mut cmd = bin();
     cmd.env("MARKBAN_URL", &s.url)
-        .args(["--token", token, "-b", "kuuno", "ls"]);
+        .args(["--token", token, "-b", "acme", "ls"]);
     let o = out(&mut cmd, None);
     assert_eq!(o.code, 1);
     assert!(!o.stderr.contains(token));
@@ -294,7 +285,7 @@ fn bad_token_is_one_line_and_never_echoed() {
 fn missing_token_is_an_actionable_error() {
     let s = server();
     let mut cmd = bin();
-    cmd.env("MARKBAN_URL", &s.url).args(["-b", "kuuno", "ls"]);
+    cmd.env("MARKBAN_URL", &s.url).args(["-b", "acme", "ls"]);
     let o = out(&mut cmd, None);
     assert_eq!(o.code, 1);
     assert!(o.stderr.contains("MARKBAN_TOKEN"), "{}", o.stderr);
@@ -308,7 +299,7 @@ fn unreachable_server_is_one_line_exit_1() {
     let mut cmd = bin();
     cmd.env("MARKBAN_URL", &url)
         .env("MARKBAN_TOKEN", "mb_secret-token")
-        .args(["-b", "kuuno", "ls"]);
+        .args(["-b", "acme", "ls"]);
     let o = out(&mut cmd, None);
     assert_eq!(o.code, 1);
     assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);
@@ -319,7 +310,7 @@ fn unreachable_server_is_one_line_exit_1() {
 #[test]
 fn dir_flag_is_refused_in_remote_mode() {
     let s = server();
-    let o = s.remote(&s.anna, Some("kuuno"), &["-C", ".", "ls"], None);
+    let o = s.remote(&s.anna, Some("acme"), &["-C", ".", "ls"], None);
     assert_eq!(o.code, 1);
     assert!(o.stderr.contains("-C"), "{}", o.stderr);
 }
@@ -330,14 +321,14 @@ fn boards_lists_what_the_token_may_use() {
     let o = s.remote(&s.anna, None, &["boards"], None);
     assert_eq!(
         (o.code, o.stdout.as_str()),
-        (0, "kuuno  Kuuno\n"),
+        (0, "acme  Acme\n"),
         "{}",
         o.stderr
     );
     let o = s.remote(&s.admin, None, &["boards"], None);
-    assert_eq!(o.stdout, "kuuno  Kuuno\nother  Other\n");
+    assert_eq!(o.stdout, "acme  Acme\nother  Other\n");
     let o = s.remote(&s.anna, None, &["boards", "--json"], None);
-    assert_eq!(o.stdout, "[{\"id\":\"kuuno\",\"title\":\"Kuuno\"}]\n");
+    assert_eq!(o.stdout, "[{\"id\":\"acme\",\"title\":\"Acme\"}]\n");
 }
 
 #[test]
@@ -345,15 +336,15 @@ fn log_prints_the_last_entries_as_json_lines() {
     let s = server();
     for title in ["One", "Two", "Three"] {
         assert_eq!(
-            s.remote(&s.anna, Some("kuuno"), &["add", title], None).code,
+            s.remote(&s.anna, Some("acme"), &["add", title], None).code,
             0
         );
     }
-    let o = s.remote(&s.anna, Some("kuuno"), &["log", "-n", "2"], None);
+    let o = s.remote(&s.anna, Some("acme"), &["log", "-n", "2"], None);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let lines: Vec<&str> = o.stdout.lines().collect();
     assert_eq!(lines.len(), 2, "{}", o.stdout);
-    let file = std::fs::read_to_string(s.data.path().join("log/kuuno.jsonl")).unwrap();
+    let file = std::fs::read_to_string(s.data.path().join("log/acme.jsonl")).unwrap();
     let stored: Vec<&str> = file.lines().collect();
     assert_eq!(lines, stored[1..]);
     assert!(lines[1].contains("\"user\":\"anna\"") && lines[1].contains("\"outcome\":\"three\""));
@@ -387,32 +378,32 @@ fn admin_commands_manage_users_and_boards_by_file_access() {
     assert!(admin_token.starts_with("mb_") && o.stdout.lines().count() == 1);
     assert!(o.stderr.contains("once"), "{}", o.stderr);
 
-    let o = admin(&data, &["board", "add", "kuuno", "Kuuno", "Todo", "Done"]);
-    assert_eq!((o.code, o.stdout.as_str()), (0, "kuuno\n"), "{}", o.stderr);
+    let o = admin(&data, &["board", "add", "acme", "Acme", "Todo", "Done"]);
+    assert_eq!((o.code, o.stdout.as_str()), (0, "acme\n"), "{}", o.stderr);
     let o = admin(&data, &["board", "add", "site", "Site", "Todo"]);
     assert_eq!(o.code, 0);
     let o = admin(&data, &["board", "list"]);
-    assert_eq!(o.stdout, "kuuno  Kuuno\nsite  Site\n");
+    assert_eq!(o.stdout, "acme  Acme\nsite  Site\n");
 
-    let o = admin(&data, &["user", "add", "anna", "--boards", "kuuno"]);
+    let o = admin(&data, &["user", "add", "anna", "--boards", "acme"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
     let anna = o.stdout.trim().to_string();
     let o = admin(
         &data,
-        &["user", "add", "bot", "--boards", "kuuno,site", "--admin"],
+        &["user", "add", "bot", "--boards", "acme,site", "--admin"],
     );
     assert_eq!(o.code, 0, "{}", o.stderr);
     let text = std::fs::read_to_string(data.join("access.toml")).unwrap();
     assert!(!text.contains(&anna) && !text.contains(&admin_token));
     assert!(
-        text.contains("[users.bot]") && text.contains(r#"boards = ["kuuno", "site"]"#),
+        text.contains("[users.bot]") && text.contains(r#"boards = ["acme", "site"]"#),
         "{text}"
     );
 
     let parsed = access::Access::load(&data).unwrap();
     assert!(parsed.authenticate(&admin_token).unwrap().admin);
     let user = parsed.authenticate(&anna).unwrap();
-    assert!(user.may_use("kuuno") && !user.may_use("site") && !user.admin);
+    assert!(user.may_use("acme") && !user.may_use("site") && !user.admin);
 
     let o = admin(&data, &["user", "boards", "anna", "site"]);
     assert_eq!(o.code, 0, "{}", o.stderr);
@@ -420,11 +411,11 @@ fn admin_commands_manage_users_and_boards_by_file_access() {
     assert!(parsed.authenticate(&anna).unwrap().may_use("site"));
 
     for bad in [
-        &["user", "add", "anna", "--boards", "kuuno"][..],
-        &["user", "add", "Bad", "--boards", "kuuno"],
+        &["user", "add", "anna", "--boards", "acme"][..],
+        &["user", "add", "Bad", "--boards", "acme"],
         &["user", "add", "eve", "--boards", "ghost"],
         &["user", "remove", "ghost"],
-        &["board", "add", "kuuno", "Again", "Todo"],
+        &["board", "add", "acme", "Again", "Todo"],
         &["board", "add", "../x", "X", "Todo"],
     ] {
         let o = admin(&data, bad);
@@ -454,10 +445,10 @@ fn admin_commands_never_go_over_http() {
     cmd.env("MARKBAN_URL", "http://127.0.0.1:9")
         .env("MARKBAN_TOKEN", "mb_x")
         .env("MARKBAN_DATA", &data)
-        .args(["server", "board", "add", "kuuno", "Kuuno", "Todo"]);
+        .args(["server", "board", "add", "acme", "Acme", "Todo"]);
     let o = out(&mut cmd, None);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert!(data.join("boards/kuuno/board.md").is_file());
+    assert!(data.join("boards/acme/board.md").is_file());
 }
 
 #[test]
@@ -500,7 +491,7 @@ fn serve_runs_the_api_from_the_command_line() {
         .trim()
         .to_string();
     assert_eq!(
-        admin(&data, &["board", "add", "kuuno", "Kuuno", "Todo"]).code,
+        admin(&data, &["board", "add", "acme", "Acme", "Todo"]).code,
         0
     );
     let bin_path = assert_cmd::cargo::cargo_bin("markban");
@@ -522,7 +513,7 @@ fn serve_runs_the_api_from_the_command_line() {
     let mut cmd = bin();
     cmd.env("MARKBAN_URL", &url)
         .env("MARKBAN_TOKEN", &token)
-        .args(["-b", "kuuno", "add", "Over the wire"]);
+        .args(["-b", "acme", "add", "Over the wire"]);
     let o = out(&mut cmd, None);
     let _ = child.kill();
     let _ = child.wait();
@@ -561,7 +552,7 @@ fn plain_http_to_a_remote_host_is_refused_before_sending_the_token() {
         let mut cmd = bin();
         cmd.env("MARKBAN_URL", &url)
             .env("MARKBAN_TOKEN", "mb_secret-token")
-            .args(["-b", "kuuno", "ls"]);
+            .args(["-b", "acme", "ls"]);
         let o = out(&mut cmd, None);
         assert_eq!(o.code, 1, "{url}");
         assert_eq!(o.stderr.lines().count(), 1, "{url}: {}", o.stderr);
@@ -602,7 +593,7 @@ fn plain_http_is_fine_on_loopback_and_with_the_escape_hatch() {
         if env {
             cmd.env("MARKBAN_ALLOW_INSECURE_HTTP", "1");
         }
-        let o = out(cmd.args(["-b", "kuuno", "ls"]), None);
+        let o = out(cmd.args(["-b", "acme", "ls"]), None);
         assert_eq!(o.code, 1);
         assert!(o.stderr.contains("cannot reach"), "{}", o.stderr);
     }
@@ -632,7 +623,7 @@ fn a_proxy_in_the_environment_is_not_used_for_loopback_http() {
         .args(["boards"]);
     let o = out(&mut cmd, None);
     assert_eq!(o.code, 0, "{}", o.stderr);
-    assert_eq!(o.stdout, "kuuno  Kuuno\n");
+    assert_eq!(o.stdout, "acme  Acme\n");
 }
 
 #[test]
@@ -657,7 +648,7 @@ fn board_remove_moves_the_board_away_and_drops_its_grants() {
     let s = server();
     let data = s.data.path();
     assert_eq!(
-        admin(data, &["user", "boards", "anna", "kuuno,other"]).code,
+        admin(data, &["user", "boards", "anna", "acme,other"]).code,
         0
     );
     let o = admin(data, &["board", "remove", "other"]);
@@ -670,8 +661,8 @@ fn board_remove_moves_the_board_away_and_drops_its_grants() {
     assert_eq!(removed.len(), 1);
     assert!(removed[0].join("board.md").is_file());
     let text = std::fs::read_to_string(data.join("access.toml")).unwrap();
-    assert!(text.contains(r#"boards = ["kuuno"]"#), "{text}");
-    assert_eq!(admin(data, &["board", "list"]).stdout, "kuuno  Kuuno\n");
+    assert!(text.contains(r#"boards = ["acme"]"#), "{text}");
+    assert_eq!(admin(data, &["board", "list"]).stdout, "acme  Acme\n");
     let o = admin(data, &["board", "remove", "other"]);
     assert_eq!(o.code, 1);
     assert_eq!(o.stderr.lines().count(), 1, "{}", o.stderr);

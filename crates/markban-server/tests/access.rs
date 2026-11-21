@@ -16,23 +16,23 @@ fn read_access(dir: &TempDir) -> String {
 #[test]
 fn init_creates_the_layout_and_one_admin() {
     let dir = TempDir::new().unwrap();
-    let token = access::init(dir.path(), "maarten").unwrap();
+    let token = access::init(dir.path(), "alice").unwrap();
     assert!(dir.path().join("boards").is_dir());
     assert!(dir.path().join("log").is_dir());
     let text = read_access(&dir);
-    assert!(text.contains("[users.maarten]"), "{text}");
+    assert!(text.contains("[users.alice]"), "{text}");
     assert!(text.contains("admin = true"), "{text}");
     assert!(text.contains(r#"boards = ["*"]"#), "{text}");
     let parsed = Access::load(dir.path()).unwrap();
     let user = parsed.authenticate(&token).unwrap();
-    assert_eq!(user.name, "maarten");
+    assert_eq!(user.name, "alice");
     assert!(user.admin);
 }
 
 #[test]
 fn init_refuses_an_existing_access_file() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     let before = read_access(&dir);
     let err = access::init(dir.path(), "other").unwrap_err();
     assert!(err.contains("already"), "{err}");
@@ -42,9 +42,9 @@ fn init_refuses_an_existing_access_file() {
 #[test]
 fn tokens_are_random_long_and_stored_only_as_sha256() {
     let dir = TempDir::new().unwrap();
-    let admin = access::init(dir.path(), "maarten").unwrap();
-    access::add_board(dir.path(), "kuuno", "Kuuno", &cols()).unwrap();
-    let anna = access::add_user(dir.path(), "anna", &["kuuno".into()], false).unwrap();
+    let admin = access::init(dir.path(), "alice").unwrap();
+    access::add_board(dir.path(), "acme", "Acme", &cols()).unwrap();
+    let anna = access::add_user(dir.path(), "anna", &["acme".into()], false).unwrap();
     assert_ne!(admin, anna);
     for token in [&admin, &anna] {
         // 32 random bytes as hex after a short prefix.
@@ -65,7 +65,7 @@ fn tokens_are_random_long_and_stored_only_as_sha256() {
 fn access_file_is_private() {
     use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     access::add_user(dir.path(), "bob", &["*".into()], false).unwrap();
     let mode = std::fs::metadata(dir.path().join("access.toml"))
         .unwrap()
@@ -77,7 +77,7 @@ fn access_file_is_private() {
 #[test]
 fn authenticate_rejects_wrong_and_near_tokens() {
     let dir = TempDir::new().unwrap();
-    let token = access::init(dir.path(), "maarten").unwrap();
+    let token = access::init(dir.path(), "alice").unwrap();
     let parsed = Access::load(dir.path()).unwrap();
     assert!(parsed.authenticate(&token).is_some());
     let mut near = token.clone();
@@ -95,7 +95,7 @@ fn authenticate_rejects_wrong_and_near_tokens() {
 #[test]
 fn user_boards_and_star() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     for id in ["a", "b"] {
         access::add_board(dir.path(), id, id, &cols()).unwrap();
     }
@@ -123,7 +123,7 @@ fn user_boards_and_star() {
 #[test]
 fn user_admin_commands_validate_their_input() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     access::add_board(dir.path(), "a", "A", &cols()).unwrap();
     let before = read_access(&dir);
     for (name, boards) in [
@@ -132,21 +132,21 @@ fn user_admin_commands_validate_their_input() {
         ("", vec!["a".into()]),
         ("anna", vec!["nope".into()]),
         ("anna", vec!["../a".into()]),
-        ("maarten", vec!["a".into()]),
+        ("alice", vec!["a".into()]),
     ] {
         let err = access::add_user(dir.path(), name, &boards, false).unwrap_err();
         assert!(!err.contains('\n'), "{err}");
     }
     assert!(access::remove_user(dir.path(), "ghost").is_err());
     assert!(access::set_boards(dir.path(), "ghost", &["a".into()]).is_err());
-    assert!(access::set_boards(dir.path(), "maarten", &["nope".into()]).is_err());
+    assert!(access::set_boards(dir.path(), "alice", &["nope".into()]).is_err());
     assert_eq!(read_access(&dir), before, "refused edits change nothing");
 }
 
 #[test]
 fn remove_user_revokes_the_token() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     let bob = access::add_user(dir.path(), "bob", &["*".into()], false).unwrap();
     access::remove_user(dir.path(), "bob").unwrap();
     assert!(
@@ -160,10 +160,10 @@ fn remove_user_revokes_the_token() {
 #[test]
 fn edits_keep_comments_and_unknown_keys() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     let path = dir.path().join("access.toml");
     let mut text = std::fs::read_to_string(&path).unwrap();
-    text.push_str("\n# keep me\n[users.maarten.extra]\nnote = \"x\"\n");
+    text.push_str("\n# keep me\n[users.alice.extra]\nnote = \"x\"\n");
     std::fs::write(&path, &text).unwrap();
     access::add_user(dir.path(), "bob", &["*".into()], false).unwrap();
     let after = std::fs::read_to_string(&path).unwrap();
@@ -174,7 +174,7 @@ fn edits_keep_comments_and_unknown_keys() {
 #[test]
 fn malformed_access_file_is_refused_not_guessed() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     let path = dir.path().join("access.toml");
     for bad in [
         "[users.x]\ntoken_sha256 = \"short\"\nboards = [\"*\"]\n",
@@ -193,7 +193,7 @@ fn malformed_access_file_is_refused_not_guessed() {
 #[test]
 fn board_add_and_list() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     access::add_board(dir.path(), "zeta", "Zeta board", &cols()).unwrap();
     access::add_board(dir.path(), "alpha", "Alpha", &cols()).unwrap();
     assert!(dir.path().join("boards/alpha/board.md").is_file());
@@ -218,7 +218,7 @@ fn board_add_and_list() {
 #[test]
 fn concurrent_admin_commands_lose_no_edit() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     let per_thread = 12;
     let tokens: Vec<Vec<String>> = std::thread::scope(|scope| {
         let handles: Vec<_> = ["a", "b"]
@@ -264,7 +264,7 @@ fn the_data_directory_is_private() {
     use std::os::unix::fs::PermissionsExt;
     let parent = TempDir::new().unwrap();
     let data = parent.path().join("data");
-    access::init(&data, "maarten").unwrap();
+    access::init(&data, "alice").unwrap();
     for sub in ["", "boards", "log"] {
         let mode = std::fs::metadata(data.join(sub))
             .unwrap()
@@ -277,7 +277,7 @@ fn the_data_directory_is_private() {
 #[test]
 fn board_remove_moves_the_board_and_its_log_and_drops_the_grants() {
     let dir = TempDir::new().unwrap();
-    access::init(dir.path(), "maarten").unwrap();
+    access::init(dir.path(), "alice").unwrap();
     for id in ["a", "b"] {
         access::add_board(dir.path(), id, id, &cols()).unwrap();
     }
@@ -326,7 +326,7 @@ fn a_token_can_be_written_to_a_new_private_file() {
     let parent = TempDir::new().unwrap();
     let data = parent.path().join("data");
     let file = parent.path().join("admin.token");
-    let token = access::init(&data, "maarten").unwrap();
+    let token = access::init(&data, "alice").unwrap();
     access::write_token_file(&file, &token).unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),

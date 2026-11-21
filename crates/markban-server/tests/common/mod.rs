@@ -6,7 +6,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-/// A data directory with boards `kuuno` and `other`, an admin (`*`) and `anna` (only `kuuno`),
+/// A data directory with boards `acme` and `other`, an admin (`*`) and `anna` (only `acme`),
 /// served on an ephemeral port.
 pub struct Fixture {
     pub data: TempDir,
@@ -23,11 +23,11 @@ impl Fixture {
     /// A fixture whose server configuration is first changed by `tune`.
     pub fn with(tune: impl FnOnce(&mut Config)) -> Self {
         let data = TempDir::new().unwrap();
-        let admin = access::init(data.path(), "maarten").unwrap();
-        for id in ["kuuno", "other"] {
+        let admin = access::init(data.path(), "alice").unwrap();
+        for id in ["acme", "other"] {
             access::add_board(data.path(), id, &format!("Board {id}"), &cols()).unwrap();
         }
-        let anna = access::add_user(data.path(), "anna", &["kuuno".to_string()], false).unwrap();
+        let anna = access::add_user(data.path(), "anna", &["acme".to_string()], false).unwrap();
         let mut config = Config::new(data.path().to_path_buf());
         tune(&mut config);
         let addr = markban_server::spawn(config, "127.0.0.1:0").unwrap();
