@@ -1,10 +1,10 @@
 //! Diagnostics: the error and warning codes of spec section 6.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Diagnostic code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Code {
     E001,
     E002,
@@ -53,7 +53,7 @@ impl fmt::Display for Code {
 }
 
 /// Errors make a board invalid; warnings do not.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
@@ -61,7 +61,7 @@ pub enum Severity {
 }
 
 /// One finding about a board, with file (relative to the board directory) and line.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: Code,
     pub severity: Severity,

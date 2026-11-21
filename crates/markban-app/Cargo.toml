@@ -1,0 +1,37 @@
+[package]
+name = "markban-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Read-only Dioxus fullstack viewer for a markban board"
+
+[dependencies]
+dioxus = { version = "=0.7.10", features = ["fullstack"] }
+markban-core = { path = "../markban-core" }
+serde.workspace = true
+
+# Server only.
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"], optional = true }
+notify-debouncer-full = { version = "0.8", optional = true }
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"], optional = true }
+ammonia = { version = "4", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+gloo-timers = { version = "0.3", features = ["futures"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+default = ["server"]
+web = ["dioxus/web"]
+server = [
+    "dioxus/server",
+    "dep:tokio",
+    "dep:notify-debouncer-full",
+    "dep:pulldown-cmark",
+    "dep:ammonia",
+]
+
+[lints]
+workspace = true

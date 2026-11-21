@@ -4,24 +4,24 @@ use crate::board::{Board, CardFile};
 use crate::check::check;
 use crate::diagnostic::Diagnostic;
 use crate::order::Decimal;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardSummary {
     pub id: String,
     pub title: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnView {
     pub id: String,
     pub name: String,
     pub cards: Vec<CardSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardView {
     pub title: String,
     pub description: String,
