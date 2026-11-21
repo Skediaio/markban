@@ -158,6 +158,7 @@ pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
 
 /// Options that create a file private to the owner (0600 on Unix).
 #[must_use]
+#[cfg_attr(not(unix), allow(unused_mut))]
 pub fn private_file() -> std::fs::OpenOptions {
     let mut options = std::fs::OpenOptions::new();
     #[cfg(unix)]

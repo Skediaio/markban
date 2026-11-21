@@ -20,6 +20,32 @@ a viewer that runs in any browser, on any device.
 3. **People watch and decide.** The viewer shows the board live as agents work. In this first version it does
    not edit: whoever wants an editor with buttons builds one on top, sending the same commands.
 
+## Install
+
+macOS and Linux (x86_64; Apple Silicon and Intel Macs):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Skediaio/markban/main/install.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/Skediaio/markban/main/install.ps1 | iex
+```
+
+This installs the `markban` binary (`~/.local/bin`, or `%LOCALAPPDATA%\Programs\markban` on Windows) and the
+agent skill (`~/.claude/skills/markban/SKILL.md` and `~/.config/opencode/skills/markban/SKILL.md`). Set
+`MARKBAN_INSTALL_DIR` to change the binary directory on macOS and Linux.
+
+**Or ask your agent.** Paste this into Claude Code, opencode or another agent:
+
+```text
+Install the markban CLI and its agent skill: on macOS or Linux run `curl -fsSL https://raw.githubusercontent.com/Skediaio/markban/main/install.sh | sh`, on Windows run `irm https://raw.githubusercontent.com/Skediaio/markban/main/install.ps1 | iex` in PowerShell. Then run `markban --version` and tell me the result. Restart yourself afterwards if the markban skill is not loaded yet.
+```
+
+From source instead: `cargo install --git https://github.com/Skediaio/markban markban-cli --locked`.
+
 ## Principles
 
 - **Everything is a command.** Every change to a board is a named command with JSON parameters in
@@ -34,7 +60,7 @@ a viewer that runs in any browser, on any device.
 
 ## Where it stands
 
-Version 0.0.0: format spec v0.1 is settled, chosen by measurement
+Version 0.1.0: format spec v0.1 is settled, chosen by measurement
 ([`research/format-experiments`](research/format-experiments)). The code is being built. What is planned and what is done:
 [`docs/roadmap.md`](docs/roadmap.md); decisions and their reasons: [`docs/decisions.md`](docs/decisions.md).
 
