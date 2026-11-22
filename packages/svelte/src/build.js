@@ -25,6 +25,8 @@ import { unified } from 'unified';
  * @property {BoardView} view
  * @property {Record<string, CardData>} cards By card id.
  * @property {string} descriptionHtml Sanitised HTML of the board description.
+ * @property {import('@markban/core').BoardFile[]} files The board's raw files, so the component
+ *   can run the full-text `search` in the browser.
  */
 
 const processor = unified().use(remarkParse).use(remarkGfm);
@@ -48,7 +50,7 @@ function toHtml(markdown) {
  * @throws {Error} `dir` is not a directory.
  */
 export function buildBoardModule(dir) {
-  const { view, card } = openBoard(dir);
+  const { view, card, files } = openBoard(dir);
   /** @type {Record<string, CardData>} */
   const cards = {};
   /**
@@ -62,5 +64,15 @@ export function buildBoardModule(dir) {
   };
   for (const column of view.columns) add(column.name, column.cards);
   add('Unsorted', view.unsorted);
-  return { view, cards, descriptionHtml: toHtml(view.description) };
+  // Archived cards sit in no column, but search can surface them; their column is their own
+  // frontmatter's, resolved to a name.
+  const nameOf = (/** @type {string | null | undefined} */ id) =>
+    id == null ? 'Unsorted' : view.columns.find((c) => c.id === id)?.name ?? 'Unsorted';
+  for (const { id } of view.archived) {
+    const detail = card(id);
+    if (detail) {
+      cards[id] = { title: detail.title, column: nameOf(detail.column), html: toHtml(detail.description) };
+    }
+  }
+  return { view, cards, descriptionHtml: toHtml(view.description), files };
 }

@@ -42,6 +42,23 @@ fn apply_writes_only_changed_files_and_reports_them() {
 }
 
 #[test]
+fn archive_and_unarchive_through_the_fs_layer_write_only_the_card_file() {
+    let dir = temp_board();
+    let original = read(dir.path(), "cards/a.md");
+    let before = loaded(dir.path());
+    let after = after_with(&before, r#"{"cmd":"card.archive","id":"a"}"#);
+    assert_eq!(
+        fs::apply(dir.path(), &before, &after).unwrap(),
+        ["cards/a.md"]
+    );
+    assert!(read(dir.path(), "cards/a.md").contains("archived: true"));
+    let out = fs::run(dir.path(), &[cmd(r#"{"cmd":"card.unarchive","id":"a"}"#)]).unwrap();
+    assert_eq!(out.first().map(|o| o.id.as_str()), Some("a"));
+    assert_eq!(read(dir.path(), "cards/a.md"), original);
+    no_temp_files(dir.path());
+}
+
+#[test]
 fn apply_orders_creations_then_modifications_then_deletions() {
     let dir = temp_board();
     let before = loaded(dir.path());

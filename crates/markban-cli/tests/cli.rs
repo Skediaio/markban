@@ -275,8 +275,16 @@ fn ls_on_demo_board_is_exact() {
     assert_eq!(o.code, 0, "{}", o.stderr);
     assert_eq!(
         o.stdout,
-        "# Markban roadmap\n## Backlog (backlog) 0\n## Doing (doing) 0\n## Done (done) 3\n0001-spec-draft  Write spec v0.1\n0002-parser  Core library and CLI\n0003-board-ui  Read-only board viewer\n"
+        "# Markban roadmap\n## Backlog (backlog) 0\n## Doing (doing) 0\n## Done (done) 3\n0001-spec-draft  Write spec v0.1\n0002-parser  Core library and CLI\n0003-board-ui  Read-only board viewer\n1 archived card(s); markban ls --archived\n"
     );
+    let archived = mb(&demo(), &["ls", "--archived"]);
+    assert_eq!(archived.code, 0, "{}", archived.stderr);
+    assert_eq!(
+        archived.stdout,
+        "# Markban roadmap\n## Archived (1)\n0004-research  Format experiments\n"
+    );
+    // the flag and a column filter exclude each other
+    assert_eq!(mb(&demo(), &["ls", "--archived", "done"]).code, 2);
 }
 
 #[test]
@@ -288,6 +296,7 @@ fn ls_json_is_the_board_view() {
     assert_eq!(v["columns"][0]["id"], "backlog");
     assert_eq!(v["columns"][2]["id"], "done");
     assert_eq!(v["columns"][2]["cards"][0]["id"], "0001-spec-draft");
+    assert_eq!(v["archived"][0]["id"], "0004-research");
 }
 
 #[test]
@@ -314,6 +323,53 @@ fn ls_shows_unsorted_and_diagnostics() {
     assert!(!o.stdout.contains("E007"), "{}", o.stdout);
     let json = mb(dir.path(), &["ls", "--json"]);
     assert!(json.stdout.contains("E007"), "{}", json.stdout);
+}
+
+#[test]
+fn archive_and_unarchive_flow() {
+    let dir = init_board();
+    ok(dir.path(), &["add", "Task", "--id", "task"]);
+    assert_eq!(ok(dir.path(), &["archive", "task"]), "task\n");
+    let card = read(dir.path(), "cards/task.md");
+    assert!(card.contains("archived: true\n"), "{card}");
+    // hidden from the listing, but announced in the footer
+    let ls = ok(dir.path(), &["ls"]);
+    assert_eq!(
+        ls,
+        "# Demo\n## Todo (todo) 0\n## Doing (doing) 0\n## Done (done) 0\n1 archived card(s); markban ls --archived\n"
+    );
+    assert_eq!(
+        ok(dir.path(), &["ls", "--archived"]),
+        "# Demo\n## Archived (1)\ntask  Task\n"
+    );
+    // archiving twice is refused with one line
+    let twice = mb(dir.path(), &["archive", "task"]);
+    assert_eq!(twice.code, 1);
+    assert_eq!(twice.stderr, "error: card 'task' is already archived\n");
+    // moving an archived card is refused
+    let mv = mb(dir.path(), &["mv", "task", "Doing"]);
+    assert_eq!(mv.code, 1);
+    assert_eq!(
+        mv.stderr,
+        "error: card 'task' is archived; run card.unarchive first\n"
+    );
+    // unarchive prints the id and brings the card back in its old column
+    assert_eq!(ok(dir.path(), &["unarchive", "task"]), "task\n");
+    assert!(
+        !read(dir.path(), "cards/task.md").contains("archived"),
+        "{}",
+        read(dir.path(), "cards/task.md")
+    );
+    assert_eq!(
+        ok(dir.path(), &["ls"]),
+        "# Demo\n## Todo (todo) 1\ntask  Task\n## Doing (doing) 0\n## Done (done) 0\n"
+    );
+    let unarchive_active = mb(dir.path(), &["unarchive", "task"]);
+    assert_eq!(unarchive_active.code, 1);
+    assert_eq!(
+        unarchive_active.stderr,
+        "error: card 'task' is not archived\n"
+    );
 }
 
 #[test]
@@ -547,4 +603,100 @@ fn edit_description_and_append_conflict() {
     let o = mb(dir.path(), &["edit", "a", "-d", "-", "--append", "-"]);
     assert_eq!(o.code, 2, "stderr {}", o.stderr);
     assert!(o.stderr.contains("cannot be used with"), "{}", o.stderr);
+}
+
+/// A board with every kind of hit: an active card, an archived card with a snippet, an
+/// unsorted card, plus column and board fields.
+fn search_board() -> TempDir {
+    let dir = init_board();
+    ok(dir.path(), &["add", "Write the docs", "-d", "Some text."]);
+    ok(dir.path(), &["add", "Second", "-c", "Doing", "--id", "two"]);
+    std::fs::write(
+        dir.path().join("cards/old-thing.md"),
+        "---\ntitle: Old thing\ncolumn: done\narchived: true\n---\n\nFirst.\nThe thing is done.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("cards/lost.md"),
+        "---\ntitle: Lost thing\ncolumn: gone\n---\n",
+    )
+    .unwrap();
+    dir
+}
+
+#[test]
+fn search_renders_every_kind_of_hit_exactly() {
+    let dir = search_board();
+    assert_eq!(
+        ok(dir.path(), &["search", "thing"]),
+        "2 hit(s)\nlost  Lost thing  unsorted\nold-thing  Old thing  done (archived)\n"
+    );
+    // A term that matched the title earns no snippet, even when the description has it too.
+    assert_eq!(
+        ok(dir.path(), &["search", "docs"]),
+        "1 hit(s)\nwrite-the-docs  Write the docs  todo\n"
+    );
+    // Terms match the description: the snippet line follows the card.
+    assert_eq!(
+        ok(dir.path(), &["search", "some", "text"]),
+        "1 hit(s)\nwrite-the-docs  Write the docs  todo\n  :1: Some text.\n"
+    );
+    // Column and board hits.
+    assert_eq!(
+        ok(dir.path(), &["search", "doing"]),
+        "1 hit(s)\ncolumn doing  Doing\n"
+    );
+    assert_eq!(
+        ok(dir.path(), &["search", "demo"]),
+        "1 hit(s)\nboard  Demo\n"
+    );
+    // Two terms, one per field of one candidate.
+    assert_eq!(
+        ok(dir.path(), &["search", "write", "text"]),
+        "1 hit(s)\nwrite-the-docs  Write the docs  todo\n  :1: Some text.\n"
+    );
+}
+
+#[test]
+fn search_without_hits_or_with_terms_nowhere() {
+    let dir = search_board();
+    assert_eq!(ok(dir.path(), &["search", "zzz"]), "0 hit(s)\n");
+    // Both terms must occur somewhere in one candidate.
+    assert_eq!(ok(dir.path(), &["search", "docs", "zzz"]), "0 hit(s)\n");
+    // Matching is case-insensitive on both sides.
+    assert_eq!(
+        ok(dir.path(), &["search", "WRITE", "TEXT"]),
+        "1 hit(s)\nwrite-the-docs  Write the docs  todo\n  :1: Some text.\n"
+    );
+}
+
+#[test]
+fn search_json_prints_the_hits_exactly() {
+    let dir = search_board();
+    assert_eq!(
+        ok(dir.path(), &["search", "--json", "thing"]),
+        "{\"cards\":[{\"id\":\"lost\",\"title\":\"Lost thing\",\"column\":null,\"archived\":false,\"snippet\":null},{\"id\":\"old-thing\",\"title\":\"Old thing\",\"column\":\"done\",\"archived\":true,\"snippet\":null}],\"columns\":[],\"board\":false}\n"
+    );
+    let o = mb(dir.path(), &["search", "--json", "demo"]);
+    assert_eq!(o.code, 0);
+    assert_eq!(o.stdout, "{\"cards\":[],\"columns\":[],\"board\":true}\n");
+}
+
+#[test]
+fn search_with_no_terms_is_a_usage_error() {
+    let dir = search_board();
+    // clap refuses no argument at all.
+    assert_eq!(mb(dir.path(), &["search"]).code, 2);
+    // Whitespace-only arguments are dropped, and then nothing remains.
+    for args in [
+        &["search", ""][..],
+        &["search", "  "],
+        &["search", "\t", "  "],
+    ] {
+        let o = mb(dir.path(), args);
+        assert_eq!(o.code, 2, "{args:?}");
+        assert_eq!(o.stdout, "");
+        assert!(o.stderr.starts_with("error: "), "{args:?}");
+        assert_eq!(o.stderr.lines().count(), 1, "{args:?}");
+    }
 }

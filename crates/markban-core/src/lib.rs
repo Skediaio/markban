@@ -10,6 +10,7 @@ pub mod diagnostic;
 pub mod frontmatter;
 pub mod fs;
 pub mod order;
+pub mod search;
 
 mod check;
 mod id;
@@ -18,6 +19,7 @@ pub mod view;
 pub use check::check;
 pub use command::{Command, CommandError, Outcome, execute, execute_batch};
 pub use id::{is_valid_id, slug};
+pub use search::search;
 pub use view::view;
 
 /// Lower-case hex SHA-256 of `bytes`: the card hash in `show --json` and `card.edit`'s

@@ -1,6 +1,7 @@
 //! Types and server functions shared by the server and the browser.
 
 use dioxus::prelude::*;
+use markban_core::search::SearchResults;
 use markban_core::view::BoardView;
 use serde::{Deserialize, Serialize};
 
@@ -11,6 +12,8 @@ pub struct CardDetail {
     pub title: String,
     pub column: String,
     pub html: String,
+    /// True when the card is archived; the modal marks it.
+    pub archived: bool,
 }
 
 /// The current board.
@@ -33,6 +36,14 @@ pub async fn get_card(id: String) -> Result<CardDetail, ServerFnError> {
 pub async fn wait_for_change(since: u64) -> Result<(u64, BoardView), ServerFnError> {
     let state = crate::server::state().map_err(ServerFnError::new)?;
     Ok(state.wait_for_change(since).await)
+}
+
+/// Full-text search over the watched board: the words of `query` (split on ASCII whitespace)
+/// are the terms, and a hit must contain every one, case-insensitively.
+#[server]
+pub async fn search(query: String) -> Result<SearchResults, ServerFnError> {
+    let state = crate::server::state().map_err(ServerFnError::new)?;
+    state.search(&query).await.map_err(ServerFnError::new)
 }
 
 /// Whether the viewer sits behind a password, so the page offers a logout link.

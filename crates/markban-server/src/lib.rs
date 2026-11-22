@@ -522,6 +522,46 @@ async fn card(
     Ok(json_ok(to_json(&detail)?))
 }
 
+// ---- search ----
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: String,
+}
+
+/// The one answer for a `q` without terms.
+const SEARCH_NEEDS_Q: &str = "`q` must hold the search terms, as in ?q=roadmap+sync";
+
+/// `GET /api/boards/{board}/search?q=<terms>`: the core's linear scan, as `search --json`
+/// prints it. `q` is split on ASCII whitespace; every term must match. More than 32 distinct terms or a
+/// term over 256 bytes is a 400.
+async fn search(
+    State(state): State<Arc<Server>>,
+    Extension(user): Extension<User>,
+    path: Result<UrlPath<String>, PathRejection>,
+    query: Result<Query<SearchQuery>, QueryRejection>,
+) -> Result<Response, ApiError> {
+    let id = path_board(path)?;
+    let dir = state.board(&user, &id)?;
+    let Query(query) = query.map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, SEARCH_NEEDS_Q))?;
+    let terms: Vec<String> = query
+        .q
+        .split_ascii_whitespace()
+        .map(str::to_string)
+        .collect();
+    if terms.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, SEARCH_NEEDS_Q));
+    }
+    let results = state
+        .blocking(move || {
+            let (board, _) = load_board(&dir)?;
+            markban_core::search::search(&board, &terms)
+                .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))
+        })
+        .await?;
+    Ok(json_ok(to_json(&results)?))
+}
+
 // ---- the log ----
 
 #[derive(Serialize)]
@@ -891,6 +931,7 @@ pub fn router(config: Config) -> Router {
         .route("/api/boards", get(list_boards))
         .route("/api/boards/{board}", get(board_view))
         .route("/api/boards/{board}/cards/{card}", get(card))
+        .route("/api/boards/{board}/search", get(search))
         .route("/api/boards/{board}/run", post(run))
         .route("/api/boards/{board}/log", get(log))
         .route_layer(axum::middleware::from_fn_with_state(

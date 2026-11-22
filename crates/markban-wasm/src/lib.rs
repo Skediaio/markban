@@ -4,6 +4,7 @@
 
 use markban_core::board::Board;
 use markban_core::diagnostic::{Code, Diagnostic};
+use markban_core::search::{SearchResults, search as core_search};
 use markban_core::view::{self, BoardView, CardDetail};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
@@ -100,6 +101,7 @@ pub fn parse_board(files: Vec<InFile>) -> BoardView {
             description: String::new(),
             columns: Vec::new(),
             unsorted: Vec::new(),
+            archived: Vec::new(),
             diagnostics: parse_diagnostics,
         },
     }
@@ -116,6 +118,24 @@ pub fn card_detail(files: Vec<InFile>, id: &str) -> Option<CardDetail> {
 #[must_use]
 pub fn check_board(files: Vec<InFile>) -> Vec<Diagnostic> {
     parse_board(files).diagnostics
+}
+
+/// The hits of a full-board search (see `markban search`). A board without a usable
+/// `board.md` gives empty results: search is a pure query and carries no diagnostics.
+///
+/// # Errors
+/// More than 32 distinct terms, or a term over 256 bytes.
+pub fn search(files: Vec<InFile>, terms: Vec<String>) -> Result<SearchResults, String> {
+    match load(files).0 {
+        Some(board) => core_search(&board, &terms).map_err(|e| e.to_string()),
+        None => markban_core::search::check_terms(&terms)
+            .map(|()| SearchResults {
+                cards: Vec::new(),
+                columns: Vec::new(),
+                board: false,
+            })
+            .map_err(|e| e.to_string()),
+    }
 }
 
 fn files_from(value: JsValue) -> Result<Vec<InFile>, JsError> {
@@ -157,4 +177,17 @@ pub fn card_js(files: JsValue, id: &str) -> Result<JsValue, JsError> {
 #[wasm_bindgen(js_name = check)]
 pub fn check_js(files: JsValue) -> Result<JsValue, JsError> {
     to_js(&check_board(files_from(files)?))
+}
+
+/// `search(files, terms)`: the hits.
+///
+/// # Errors
+/// `files` is not an array of `{ path, content }` strings, `terms` is not an array of
+/// strings, or the terms are over the limits (32 distinct, 256 bytes each).
+#[wasm_bindgen(js_name = search)]
+pub fn search_js(files: JsValue, terms: JsValue) -> Result<JsValue, JsError> {
+    let terms: Vec<String> = serde_wasm_bindgen::from_value(terms)
+        .map_err(|e| JsError::new(&format!("terms must be an array of strings: {e}")))?;
+    let hits = search(files_from(files)?, terms).map_err(|e| JsError::new(&e))?;
+    to_js(&hits)
 }

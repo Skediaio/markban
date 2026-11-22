@@ -19,6 +19,7 @@ fn endpoints(id: &str) -> Vec<(&'static str, String, Option<&'static str>)> {
     vec![
         ("GET", format!("/api/boards/{id}"), None),
         ("GET", format!("/api/boards/{id}/cards/first"), None),
+        ("GET", format!("/api/boards/{id}/search?q=x"), None),
         ("POST", format!("/api/boards/{id}/run"), Some(ADD)),
         ("GET", format!("/api/boards/{id}/log"), None),
         ("GET", format!("/api/boards/{id}/log?limit=5"), None),
@@ -338,6 +339,104 @@ fn view_and_card_match_the_core() {
         r.json()["error"],
         "no card 'nope'; card ids are the file names in cards/ without .md"
     );
+}
+
+// ---- search ----
+
+#[test]
+fn search_matches_cards_columns_and_the_board() {
+    let f = Fixture::new();
+    f.post(
+        "/api/boards/acme/run",
+        Some(&f.anna),
+        r#"[{"cmd":"card.add","title":"Find me","description":"needle in the body"},{"cmd":"card.add","title":"Old needle"},{"cmd":"card.archive","id":"old-needle"}]"#,
+    );
+    let r = f.get("/api/boards/acme/search?q=needle", Some(&f.anna));
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(
+        r.headers.contains("content-type: application/json"),
+        "{}",
+        r.headers
+    );
+    let (board, _) = markban_core::fs::load(&f.board("acme")).unwrap();
+    let expected = markban_core::search::search(&board.unwrap(), &["needle".to_string()]).unwrap();
+    assert_eq!(r.body, serde_json::to_string(&expected).unwrap());
+    let v = r.json();
+    assert_eq!(v["cards"].as_array().unwrap().len(), 2);
+    assert_eq!(v["cards"][0]["id"], "find-me");
+    assert_eq!(v["cards"][0]["archived"], false);
+    assert_eq!(v["cards"][0]["snippet"]["line"], 1);
+    assert_eq!(v["cards"][0]["snippet"]["text"], "needle in the body");
+    assert_eq!(v["cards"][1]["id"], "old-needle");
+    assert_eq!(v["cards"][1]["archived"], true);
+    assert_eq!(v["columns"], serde_json::json!([]));
+    assert_eq!(v["board"], false);
+
+    // Several terms, `+`-separated: all of them required.
+    let r = f.get("/api/boards/acme/search?q=old+needle", Some(&f.anna));
+    assert_eq!(r.status, 200);
+    let v = r.json();
+    assert_eq!(v["cards"].as_array().unwrap().len(), 1);
+    assert_eq!(v["cards"][0]["id"], "old-needle");
+    let r = f.get("/api/boards/acme/search?q=old+zzz", Some(&f.anna));
+    assert_eq!(r.json()["cards"], serde_json::json!([]));
+
+    // Column and board hits.
+    assert_eq!(
+        f.get("/api/boards/acme/search?q=todo", Some(&f.anna)).body,
+        r#"{"cards":[],"columns":[{"id":"todo","name":"Todo"}],"board":false}"#
+    );
+    assert_eq!(
+        f.get("/api/boards/acme/search?q=acme", Some(&f.anna)).body,
+        r#"{"cards":[],"columns":[],"board":true}"#
+    );
+    // No hits is still a 200.
+    assert_eq!(
+        f.get("/api/boards/acme/search?q=zzz", Some(&f.anna)).body,
+        r#"{"cards":[],"columns":[],"board":false}"#
+    );
+}
+
+#[test]
+fn search_refuses_too_many_or_too_long_terms() {
+    let f = Fixture::new();
+    let many: Vec<String> = (0..33).map(|i| format!("t{i}")).collect();
+    let long = "a".repeat(257);
+    for q in [many.join("+"), long] {
+        let path = format!("/api/boards/acme/search?q={q}");
+        let r = f.get(&path, Some(&f.anna));
+        assert_eq!(r.status, 400, "{}", r.body);
+        let msg = r.json()["error"].as_str().unwrap().to_string();
+        assert!(!msg.is_empty() && !msg.contains('\n'), "{msg}");
+    }
+    // duplicates do not count towards the limit
+    let dup = vec!["needle"; 40].join("+");
+    let r = f.get(&format!("/api/boards/acme/search?q={dup}"), Some(&f.anna));
+    assert_eq!(r.status, 200, "{}", r.body);
+}
+
+#[test]
+fn search_without_terms_is_refused() {
+    let f = Fixture::new();
+    for path in [
+        "/api/boards/acme/search",
+        "/api/boards/acme/search?q=",
+        "/api/boards/acme/search?q=%20%20",
+        "/api/boards/acme/search?q=+++",
+        "/api/boards/acme/search?limit=5",
+    ] {
+        let r = f.get(path, Some(&f.anna));
+        assert_eq!(r.status, 400, "{path}: {}", r.body);
+        let v = r.json();
+        assert_eq!(v["code"], 1);
+        let msg = v["error"].as_str().unwrap();
+        assert!(!msg.is_empty() && !msg.contains('\n'), "{path}: {msg}");
+    }
+    // A hidden board answers exactly like an unknown one.
+    let hidden = f.get("/api/boards/other/search?q=x", Some(&f.anna));
+    let missing = f.get("/api/boards/ghost/search?q=x", Some(&f.anna));
+    assert_eq!((hidden.status, hidden.body), (missing.status, missing.body));
+    assert_eq!(hidden.status, 404);
 }
 
 // ---- running commands ----

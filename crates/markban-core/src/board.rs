@@ -321,6 +321,14 @@ impl CardFile {
         self.frontmatter.as_ref()?.get(key)
     }
 
+    /// Whether the card is archived: an `archived` key whose value is exactly `true` (plain or
+    /// double-quoted; an empty value counts as missing). Any other value counts as active
+    /// (warning W003).
+    #[must_use]
+    pub fn is_archived(&self) -> bool {
+        matches!(self.get("archived"), Some(Ok(v)) if v == "true")
+    }
+
     /// The card's file name.
     #[must_use]
     pub fn file_name(&self) -> String {

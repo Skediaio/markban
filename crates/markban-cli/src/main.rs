@@ -11,6 +11,7 @@ use cli::{BoardCmd, Cli, Cmd, ColCmd, Position, ServerCmd, UserCmd};
 use markban_core::Command;
 use markban_core::diagnostic::Severity;
 use markban_core::fs::{self, RunError};
+use markban_core::search::SearchResults;
 use markban_core::view::{self, BoardView, CardDetail};
 use markban_server::access;
 use remote::{Remote, RemoteError};
@@ -23,6 +24,9 @@ use markban_core::fs::EXIT_INVALID;
 /// 3 contention (another writer changed the board; safe to retry); 4 partially applied.
 #[cfg(test)]
 use markban_core::fs::{EXIT_CONTENDED, EXIT_PARTIAL};
+
+/// Usage error, as clap's own rejections (spec section 8).
+const EXIT_USAGE: u8 = 2;
 
 /// A failure to report: a one-line message and the exit code.
 struct Fail {
@@ -257,6 +261,34 @@ impl Target {
         }
     }
 
+    /// The hits of a full-board search, with the board title (for the `board …` line; the
+    /// title costs one extra view request in remote mode, so only when the board matched).
+    fn search(&self, terms: &[String]) -> Result<(SearchResults, Option<String>), Fail> {
+        match self {
+            Self::Local(dir) => {
+                let (board, _) = load(&discover(dir.as_deref())?)?;
+                let title = board
+                    .board
+                    .frontmatter
+                    .get("title")
+                    .and_then(Result::ok)
+                    .unwrap_or_default();
+                let results = markban_core::search::search(&board, terms)
+                    .map_err(|e| Fail::from(e.to_string()))?;
+                Ok((results, Some(title)))
+            }
+            Self::Remote(remote) => {
+                let results = remote.search(terms)?;
+                let title = if results.board {
+                    Some(remote.view()?.title)
+                } else {
+                    None
+                };
+                Ok((results, title))
+            }
+        }
+    }
+
     fn remote(&self, what: &str) -> Result<&Remote, Fail> {
         match self {
             Self::Remote(remote) => Ok(remote),
@@ -309,8 +341,17 @@ fn dispatch(cli: Cli) -> Result<ExitCode, Fail> {
 fn board_command(target: &Target, command: Cmd) -> Result<ExitCode, Fail> {
     let one = |command: Command| target.run(&[command], None);
     match command {
-        Cmd::Ls { column, json } => ls(&target.view()?, column.as_deref(), json)?,
+        Cmd::Ls {
+            column,
+            archived,
+            json,
+        } => ls(&target.view()?, column.as_deref(), archived, json)?,
         Cmd::Show { id, json } => show(&target.card(&id)?, json)?,
+        Cmd::Search { terms, json } => {
+            let terms = search_terms(&terms)?;
+            let (results, title) = target.search(&terms)?;
+            search(&results, title.as_deref(), json)?;
+        }
         Cmd::Add {
             title,
             column,
@@ -358,6 +399,8 @@ fn board_command(target: &Target, command: Cmd) -> Result<ExitCode, Fail> {
             })?;
         }
         Cmd::Rm { id } => one(Command::CardRemove { id })?,
+        Cmd::Archive { id } => one(Command::CardArchive { id })?,
+        Cmd::Unarchive { id } => one(Command::CardUnarchive { id })?,
         Cmd::Col(col) => one(column_command(col))?,
         Cmd::Init { title, columns } => {
             let init = [Command::BoardInit { title, columns }];
@@ -439,16 +482,29 @@ fn json_line<T: serde::Serialize>(value: &T) -> Result<String, Fail> {
         .map_err(|e| format!("cannot encode JSON: {e}"))?)
 }
 
-fn ls(board_view: &BoardView, filter: Option<&str>, json: bool) -> Result<(), Fail> {
+fn ls(
+    board_view: &BoardView,
+    filter: Option<&str>,
+    archived: bool,
+    json: bool,
+) -> Result<(), Fail> {
     if json {
         emit_json(&json_line(board_view)?);
         return Ok(());
     }
-    emit(&render_ls(board_view, filter)?);
+    emit(&render_ls(board_view, filter, archived)?);
     Ok(())
 }
 
-fn render_ls(view: &BoardView, filter: Option<&str>) -> Result<String, Fail> {
+fn render_ls(view: &BoardView, filter: Option<&str>, archived: bool) -> Result<String, Fail> {
+    if archived {
+        let mut out = format!("# {}\n", view.title);
+        out.push_str(&format!("## Archived ({})\n", view.archived.len()));
+        for card in &view.archived {
+            out.push_str(&format!("{}  {}\n", card.id, card.title));
+        }
+        return Ok(out);
+    }
     let unsorted_only = filter.is_some_and(|f| f.eq_ignore_ascii_case("unsorted"));
     let only = match filter {
         Some(f) if !unsorted_only => Some(
@@ -491,6 +547,12 @@ fn render_ls(view: &BoardView, filter: Option<&str>) -> Result<String, Fail> {
             out.push_str(&format!("{}  {}\n", card.id, card.title));
         }
     }
+    if !view.archived.is_empty() {
+        out.push_str(&format!(
+            "{} archived card(s); markban ls --archived\n",
+            view.archived.len()
+        ));
+    }
     if !view.diagnostics.is_empty() {
         out.push_str(&format!(
             "! {} problem(s); run markban check\n",
@@ -518,6 +580,62 @@ fn show(card: &CardDetail, json: bool) -> Result<(), Fail> {
     }
     emit(&out);
     Ok(())
+}
+
+/// The search terms: the whitespace-separated words of the arguments. Arguments that are
+/// empty after trimming drop out; when nothing remains it is a usage error.
+fn search_terms(args: &[String]) -> Result<Vec<String>, Fail> {
+    let terms: Vec<String> = args
+        .iter()
+        .filter(|arg| !arg.trim().is_empty())
+        .flat_map(|arg| arg.split_ascii_whitespace())
+        .map(str::to_string)
+        .collect();
+    if terms.is_empty() {
+        return Err(Fail {
+            message: "search needs at least one term, e.g. `markban search roadmap`".to_string(),
+            code: EXIT_USAGE,
+        });
+    }
+    Ok(terms)
+}
+
+fn search(results: &SearchResults, board_title: Option<&str>, json: bool) -> Result<(), Fail> {
+    if json {
+        emit_json(&json_line(results)?);
+        return Ok(());
+    }
+    emit(&render_search(results, board_title));
+    Ok(())
+}
+
+/// `<n> hit(s)`, then the cards in `ls` order (archived ones flagged, with a description
+/// snippet line when a term matched the description), then the columns, then the board.
+fn render_search(results: &SearchResults, board_title: Option<&str>) -> String {
+    let hits = results.cards.len() + results.columns.len() + usize::from(results.board);
+    let mut out = format!("{hits} hit(s)\n");
+    for card in &results.cards {
+        out.push_str(&format!(
+            "{}  {}  {}",
+            card.id,
+            card.title,
+            card.column.as_deref().unwrap_or("unsorted")
+        ));
+        if card.archived {
+            out.push_str(" (archived)");
+        }
+        out.push('\n');
+        if let Some(snippet) = &card.snippet {
+            out.push_str(&format!("  :{}: {}\n", snippet.line, snippet.text));
+        }
+    }
+    for column in &results.columns {
+        out.push_str(&format!("column {}  {}\n", column.id, column.name));
+    }
+    if let Some(title) = board_title.filter(|_| results.board) {
+        out.push_str(&format!("board  {title}\n"));
+    }
+    out
 }
 
 /// Prints every diagnostic; failure when one is an error.

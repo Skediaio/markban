@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { card, check, init, loadBoard, openBoard, parseBoard, readBoardFiles } from '../src/index.node.js';
+import { card, check, init, loadBoard, openBoard, parseBoard, readBoardFiles, search } from '../src/index.node.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const demo = join(here, '../../../examples/demo-board');
@@ -56,6 +56,71 @@ describe('API on in-memory files', () => {
   it('rejects input that is not a file list', () => {
     // @ts-expect-error deliberately wrong
     expect(() => parseBoard('nope')).toThrow(/files must be an array/);
+  });
+});
+
+describe('archived cards', () => {
+  const files = readBoardFiles(demo).files;
+
+  it('parseBoard lists them in `archived` (id order), not in columns or unsorted', () => {
+    const view = parseBoard(files);
+    expect(view.archived.map((c) => c.id)).toEqual(['0004-research']);
+    const shown = [
+      ...view.columns.flatMap((c) => c.cards.map((card) => card.id)),
+      ...view.unsorted.map((card) => card.id),
+    ];
+    expect(shown).not.toContain('0004-research');
+  });
+
+  it('card() sets archived: true for them and leaves the flag out for active cards', () => {
+    expect(card(files, '0004-research')?.archived).toBe(true);
+    expect('archived' in (card(files, '0001-spec-draft') ?? {})).toBe(false);
+  });
+
+  it('a board without archived cards has an empty list', () => {
+    const view = parseBoard([{ path: 'board.md', content: '---\nmarkban: 0.1\n---\n' }]);
+    expect(view.archived).toEqual([]);
+  });
+});
+
+describe('search', () => {
+  const files = readBoardFiles(demo).files;
+
+  it('AND over the terms, matching ids, titles and descriptions', () => {
+    expect(search(files, ['spec', 'draft']).cards.map((c) => c.id)).toEqual(['0001-spec-draft']);
+    expect(search(files, ['SPEC'])).toEqual(search(files, ['spec']), 'terms are case-insensitive');
+  });
+
+  it('flags archived hits, orders them after the active ones, and carries a snippet', () => {
+    const hits = search(files, ['experiments']);
+    expect(hits.cards.map((c) => c.id)).toEqual(['0001-spec-draft', '0004-research']);
+    expect(hits.cards[0].archived).toBe(false);
+    expect(hits.cards[1].archived).toBe(true);
+    expect(hits.cards[1].column).toBe('done');
+    expect(hits.cards[0].snippet).toMatchObject({
+      line: 1,
+      text: 'The format in `spec/SPEC.md`, chosen after the experiments in `research/format-experiments`.',
+    });
+  });
+
+  it('matches columns and the board itself', () => {
+    expect(search(files, ['backlog']).columns).toEqual([{ id: 'backlog', name: 'Backlog' }]);
+    expect(search(files, ['backlog']).cards).toEqual([]);
+    expect(search(files, ['roadmap'])).toEqual({ cards: [], columns: [], board: true });
+  });
+
+  it('empty terms give empty results', () => {
+    expect(search(files, [])).toEqual({ cards: [], columns: [], board: false });
+  });
+
+  it('a board without a usable board.md gives empty results', () => {
+    const hits = search([{ path: 'cards/a.md', content: '---\ntitle: A\n---\n' }], ['a']);
+    expect(hits).toEqual({ cards: [], columns: [], board: false });
+  });
+
+  it('rejects terms that are not an array of strings', () => {
+    // @ts-expect-error deliberately wrong
+    expect(() => search(files, 'nope')).toThrow(/terms must be an array/);
   });
 });
 

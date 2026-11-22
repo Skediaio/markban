@@ -1,6 +1,6 @@
 /**
  * The `markban()` Vite plugin: `import board from 'markban:boards/roadmap'` loads a board
- * directory at build time. The module exports `{ view, cards, descriptionHtml }` (see
+ * directory at build time. The module exports `{ view, cards, descriptionHtml, files }` (see
  * `build.js`) as default and as named exports. In dev, an edit of `board.md` or of a file
  * directly in `cards/` reloads the page, so an agent's change shows up live.
  * @module
@@ -80,7 +80,7 @@ export function markban(options = {}) {
         this.addWatchFile(join(dir, 'cards', `${cardId}.md`));
       }
       const json = JSON.stringify(data);
-      return `const board = ${json};\nexport default board;\nexport const { view, cards, descriptionHtml } = board;\n`;
+      return `const board = ${json};\nexport default board;\nexport const { view, cards, descriptionHtml, files } = board;\n`;
     },
 
     configureServer(server) {

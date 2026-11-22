@@ -10,7 +10,7 @@ import { markReady } from './api.js';
 initSync({ module: readFileSync(new URL('../wasm/markban_wasm_bg.wasm', import.meta.url)) });
 markReady();
 
-export { parseBoard, card, check } from './api.js';
+export { parseBoard, card, check, search } from './api.js';
 export { loadBoard, openBoard, readBoardFiles } from './load.js';
 
 /**

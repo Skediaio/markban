@@ -29,6 +29,7 @@ fn demo_board_has_zero_diagnostics() {
 fn every_code_has_exactly_one_fixture_yielding_only_that_code() {
     let all = [
         "E001", "E002", "E003", "E004", "E005", "E006", "E007", "E008", "E009", "W001", "W002",
+        "W003",
     ];
     for code in all {
         let dir = fixtures(&format!("invalid/{code}"));
@@ -144,4 +145,96 @@ fn empty_order_counts_as_missing() {
     let (b, _) = Board::parse(board, cards, vec![]);
     let diags = markban_core::check(&b.unwrap());
     assert!(diags.is_empty(), "{diags:?}");
+}
+
+// ---- archived ----
+
+#[test]
+fn w003_for_any_archived_value_other_than_true() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    for value in ["yes", "false", "TRUE", "1"] {
+        let cards = vec![(
+            "c.md".to_string(),
+            format!("---\ntitle: C\ncolumn: a\narchived: {value}\n---\n").into_bytes(),
+        )];
+        let (b, _) = Board::parse(board, cards, vec![]);
+        let diags = markban_core::check(&b.unwrap());
+        assert_eq!(diags.len(), 1, "{value}: {diags:?}");
+        let d = diags.first().unwrap();
+        assert_eq!(d.code, Code::W003, "{value}: {diags:?}");
+        assert_eq!(d.severity, Severity::Warning);
+        assert_eq!(d.file, "cards/c.md");
+        assert_eq!(d.line, Some(4));
+        assert_eq!(
+            d.to_string(),
+            format!(
+                "cards/c.md:4: W003 `archived` is '{value}' but only `true` is valid; the card counts as active"
+            ),
+            "{value}"
+        );
+    }
+}
+
+#[test]
+fn archived_true_or_quoted_true_or_empty_or_absent_is_no_warning() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    for text in [
+        "---\ntitle: C\ncolumn: a\narchived: true\n---\n",
+        "---\ntitle: C\ncolumn: a\narchived: \"true\"\n---\n",
+        "---\ntitle: C\ncolumn: a\narchived:\n---\n",
+        "---\ntitle: C\ncolumn: a\n---\n",
+    ] {
+        let cards = vec![("c.md".to_string(), text.as_bytes().to_vec())];
+        let (b, _) = Board::parse(board, cards, vec![]);
+        let b = b.unwrap();
+        let diags = markban_core::check(&b);
+        assert!(diags.is_empty(), "{text}: {diags:?}");
+        let archived = text.contains("archived: true") || text.contains("archived: \"true\"");
+        assert_eq!(b.cards.get("c").unwrap().is_archived(), archived, "{text}");
+    }
+}
+
+#[test]
+fn malformed_archived_value_is_e009_at_its_line() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    let cards = vec![(
+        "c.md".to_string(),
+        b"---\ntitle: C\ncolumn: a\narchived: \"true\n---\n".to_vec(),
+    )];
+    let (b, _) = Board::parse(board, cards, vec![]);
+    let diags = markban_core::check(&b.unwrap());
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags.first().unwrap().code, Code::E009);
+    assert_eq!(diags.first().unwrap().line, Some(4));
+}
+
+#[test]
+fn archived_cards_do_not_count_for_w002() {
+    let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
+    // one archived and one active card sharing an order: no W002.
+    let cards = vec![
+        (
+            "arch.md".to_string(),
+            b"---\ntitle: A\ncolumn: a\norder: 1000\narchived: true\n---\n".to_vec(),
+        ),
+        (
+            "live.md".to_string(),
+            b"---\ntitle: L\ncolumn: a\norder: 1000\n---\n".to_vec(),
+        ),
+    ];
+    let (b, _) = Board::parse(board, cards, vec![]);
+    assert!(markban_core::check(&b.unwrap()).is_empty());
+    // two archived cards sharing an order: no W002 either.
+    let cards = vec![
+        (
+            "a1.md".to_string(),
+            b"---\ntitle: A1\ncolumn: a\norder: 1000\narchived: true\n---\n".to_vec(),
+        ),
+        (
+            "a2.md".to_string(),
+            b"---\ntitle: A2\ncolumn: a\norder: 1000\narchived: true\n---\n".to_vec(),
+        ),
+    ];
+    let (b, _) = Board::parse(board, cards, vec![]);
+    assert!(markban_core::check(&b.unwrap()).is_empty());
 }

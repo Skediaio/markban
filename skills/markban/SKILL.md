@@ -20,7 +20,9 @@ Commands, output and exit codes are identical in both modes.
 ## 2. Workflow
 
 1. `markban ls` once: the whole board, one line per card (`<id>  <title>` under `## <Column> (<column id>) <n>`).
-2. `markban show <id>` only for a card whose description you need.
+2. `markban show <id>` only for a card whose description you need. `markban search <terms…>` finds cards by
+   content (titles, descriptions, columns) when you do not know the id; archived cards are included and
+   marked.
 3. Change it with one command, or with `markban run` for several changes.
 4. Read the result: success prints only the affected id. Do not run `ls` again just to confirm.
 
@@ -53,8 +55,11 @@ markban add "Title" [-c <column>] [-d "text" | -d -] [--top | --before <id> | --
 markban mv <id> [<column>] [--top | --before <id> | --after <id>]
 markban edit <id> [--title "..."] [-d "..." | -d - | --append "..." | --append -] [--if-unchanged <sha256>]
 markban rm <id>
+markban archive <id>            # done: hide the card, keep its file, column and place
+markban unarchive <id>          # back in its old column and place
 markban col add "Name" [--before <column>] | col rename <column> "Name" | col mv <column> [--before <column>]
 markban col rm <column> [--move-to <column>]
+markban search <term> [<term>…]     # find cards by content; all terms must match, archived included
 markban check                     # all diagnostics; exit 1 when the board has errors
 markban log -n 10                 # server mode only: who changed what
 ```
@@ -75,8 +80,9 @@ markban run <<'EOF'
 EOF
 ```
 
-Command names: `card.add`, `card.move`, `card.edit`, `card.remove`, `column.add`, `column.rename`,
-`column.move`, `column.remove`. On an error the output names the failing line; nothing was changed.
+Command names: `card.add`, `card.move`, `card.edit`, `card.remove`, `card.archive`, `card.unarchive`,
+`column.add`, `column.rename`, `column.move`, `column.remove`. On an error the output names the failing line;
+nothing was changed.
 
 ## 5. Exit codes
 
@@ -93,6 +99,9 @@ as `--if-unchanged <sha256>` to `edit`. A changed card then gives exit 3 instead
 
 ## 6. Rules
 
+- Close a finished card with `markban archive`, not `rm`: the card keeps its column and place and can come
+  back with `markban unarchive`. `rm` deletes the file; git is the undo. `markban ls` hides archived cards and
+  ends with `N archived card(s)`; `markban ls --archived` lists only them.
 - Use the CLI. Editing files by hand is allowed only in local mode, and then follow `spec/SPEC.md` "Rules for
   writers" of markban: one card per file, move a card by changing `column`, never rename a card file.
 - Never invent card ids, never rename them, never move card files between directories.

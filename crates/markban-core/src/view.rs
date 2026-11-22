@@ -12,6 +12,9 @@ use std::collections::BTreeMap;
 pub struct CardSummary {
     pub id: String,
     pub title: String,
+    /// Present only when true: set on archived cards of [`view_with_archived`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +31,8 @@ pub struct BoardView {
     pub columns: Vec<ColumnView>,
     /// Cards whose column is missing or not a column of the board, sorted by id.
     pub unsorted: Vec<CardSummary>,
+    /// Archived cards, sorted by id: hidden from `columns` and `unsorted`.
+    pub archived: Vec<CardSummary>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -41,6 +46,13 @@ pub struct CardDetail {
     pub description: String,
     /// Lower-case hex SHA-256 of the card file; pass it as `card.edit`'s `if_unchanged`.
     pub sha256: String,
+    /// Present only when true, so an active card serializes exactly as before.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 /// The card `id` in full, `None` when the board has no such card.
@@ -58,6 +70,7 @@ pub fn card(board: &Board, id: &str) -> Option<CardDetail> {
         column: text(card, "column"),
         description: body.trim_end_matches(['\n', '\r']).to_string(),
         sha256: crate::sha256_hex(&card.to_bytes()),
+        archived: card.is_archived(),
     })
 }
 
@@ -83,6 +96,17 @@ fn text(card: &CardFile, key: &str) -> Option<String> {
 /// decimal comparison), ties by id; then cards without a valid `order`, by id.
 #[must_use]
 pub fn view(board: &Board) -> BoardView {
+    build(board, false)
+}
+
+/// Like [`view`], but archived cards sit in their own column (or `unsorted`) at their `order`,
+/// each marked `archived`, and `archived` stays empty. For viewers that offer "show archived".
+#[must_use]
+pub fn view_with_archived(board: &Board) -> BoardView {
+    build(board, true)
+}
+
+fn build(board: &Board, include_archived: bool) -> BoardView {
     let file = &board.board;
     let mut columns: Vec<(String, String)> = Vec::new();
     for column in file.columns() {
@@ -100,11 +124,17 @@ pub fn view(board: &Board) -> BoardView {
 
     let mut by_column: BTreeMap<&str, Vec<Entry>> = BTreeMap::new();
     let mut unsorted = Vec::new();
+    let mut archived = Vec::new();
     for (id, card) in &board.cards {
         let summary = CardSummary {
             id: id.clone(),
             title: text(card, "title").unwrap_or_else(|| id.clone()),
+            archived: include_archived && card.is_archived(),
         };
+        if !include_archived && card.is_archived() {
+            archived.push(summary);
+            continue;
+        }
         let order = text(card, "order").and_then(|o| Decimal::parse(&o));
         let known = text(card, "column").and_then(|c| columns.iter().find(|(cid, _)| *cid == c));
         match known {
@@ -138,6 +168,7 @@ pub fn view(board: &Board) -> BoardView {
         description: file.description.trim().to_string(),
         columns,
         unsorted,
+        archived,
         diagnostics: check(board),
     }
 }

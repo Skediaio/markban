@@ -2477,7 +2477,7 @@ checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "markban-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ammonia",
  "base64 0.22.1",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "markban-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -2514,7 +2514,7 @@ dependencies = [
 
 [[package]]
 name = "markban-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "serde",
@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "markban-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum",
  "getrandom 0.3.4",
@@ -2545,7 +2545,7 @@ dependencies = [
 
 [[package]]
 name = "markban-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "markban-core",
  "serde",
@@ -4861,7 +4861,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "xxhash-rust"

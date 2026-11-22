@@ -7,7 +7,8 @@ use dioxus::server::axum::middleware::Next;
 use dioxus::server::axum::response::{IntoResponse, Response};
 use markban_core::board::Board;
 use markban_core::diagnostic::{Code, Diagnostic};
-use markban_core::view::{BoardView, view};
+use markban_core::search::SearchResults;
+use markban_core::view::{BoardView, view, view_with_archived};
 use markban_server::{host_allowed, parse_hosts, request_host};
 use notify_debouncer_full::notify::{self, RecursiveMode};
 use notify_debouncer_full::{DebounceEventResult, Debouncer, RecommendedCache, new_debouncer};
@@ -416,6 +417,7 @@ fn failed_view(message: String) -> BoardView {
         description: String::new(),
         columns: Vec::new(),
         unsorted: Vec::new(),
+        archived: Vec::new(),
         diagnostics: vec![Diagnostic::new(Code::E001, ".", None, message)],
     }
 }
@@ -424,7 +426,7 @@ fn failed_view(message: String) -> BoardView {
 #[must_use]
 pub fn load_view(dir: &Path) -> BoardView {
     match markban_core::fs::load(dir) {
-        Ok((Some(board), _)) => view(&board),
+        Ok((Some(board), _)) => view_with_archived(&board),
         Ok((None, diagnostics)) => BoardView {
             diagnostics,
             ..failed_view(String::new())
@@ -433,13 +435,24 @@ pub fn load_view(dir: &Path) -> BoardView {
     }
 }
 
-/// The name of the column that shows card `id`, or "Unsorted".
+/// The name of the column that card `id` belongs to, or "Unsorted". The card's own `column`
+/// key decides, so an archived card (absent from the view's columns) still shows its column.
 fn column_name(board: &Board, id: &str) -> String {
-    view(board)
-        .columns
-        .into_iter()
-        .find(|c| c.cards.iter().any(|card| card.id == id))
-        .map_or_else(|| "Unsorted".to_string(), |c| c.name)
+    let Some(card) = board.cards.get(id) else {
+        return "Unsorted".to_string();
+    };
+    let given = card
+        .get("column")
+        .and_then(Result::ok)
+        .filter(|c| !c.is_empty());
+    match given {
+        Some(column) => view(board)
+            .columns
+            .into_iter()
+            .find(|c| c.id == column)
+            .map_or_else(|| "Unsorted".to_string(), |c| c.name),
+        None => "Unsorted".to_string(),
+    }
 }
 
 /// Loads one card of the board in `dir` with its description rendered to sanitised HTML.
@@ -463,7 +476,30 @@ pub fn load_card(dir: &Path, id: &str) -> Result<CardDetail, String> {
         title,
         column,
         html: render_markdown(&card.body),
+        archived: card.is_archived(),
     })
+}
+
+/// The hits of the words of `query` (split on ASCII whitespace) in the board in `dir`. A query
+/// without terms, or a board that cannot be read, gives empty results: search is a read, never
+/// a diagnostic.
+///
+/// # Errors
+/// One line when the query has more than 32 distinct words or a word over 256 bytes.
+pub fn load_search(dir: &Path, query: &str) -> Result<SearchResults, String> {
+    let terms: Vec<String> = query.split_ascii_whitespace().map(str::to_string).collect();
+    match markban_core::fs::load(dir) {
+        Ok((Some(board), _)) => {
+            markban_core::search::search(&board, &terms).map_err(|e| e.to_string())
+        }
+        _ => markban_core::search::check_terms(&terms)
+            .map(|()| SearchResults {
+                cards: Vec::new(),
+                columns: Vec::new(),
+                board: false,
+            })
+            .map_err(|e| e.to_string()),
+    }
 }
 
 impl State {
@@ -484,6 +520,19 @@ impl State {
         let _ = tokio::time::timeout(LONG_POLL, rx.wait_for(|rev| *rev != since)).await;
         let rev = *rx.borrow();
         (rev, load_view(&self.dir))
+    }
+
+    /// Searches the watched board for the words of `query`. The file work
+    /// runs on the blocking pool, never on the async workers.
+    ///
+    /// # Errors
+    /// A message when the query is over the limits or the request fails on the server.
+    pub async fn search(&self, query: &str) -> Result<SearchResults, String> {
+        let dir = self.dir.clone();
+        let query = query.to_string();
+        tokio::task::spawn_blocking(move || load_search(&dir, &query))
+            .await
+            .map_err(|e| format!("the request failed on the server: {e}"))?
     }
 }
 
@@ -640,6 +689,144 @@ mod tests {
         .expect("lost");
         assert_eq!(load_card(dir.path(), "a").expect("a").column, "To do");
         assert_eq!(load_card(dir.path(), "lost").expect("l").column, "Unsorted");
+    }
+
+    #[test]
+    fn an_archived_card_keeps_its_column_and_reports_the_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("board.md"),
+            "---\nmarkban: 0.1\ncolumns:\n  - id: todo\n    name: To do\n---\n",
+        )
+        .expect("board");
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        std::fs::write(
+            dir.path().join("cards/a.md"),
+            "---\ntitle: A\ncolumn: todo\narchived: true\n---\n",
+        )
+        .expect("a");
+        let detail = load_card(dir.path(), "a").expect("a");
+        assert!(detail.archived);
+        assert_eq!(detail.column, "To do");
+    }
+
+    #[test]
+    fn load_view_keeps_archived_cards_in_their_column_marked() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("board.md"),
+            "---\nmarkban: 0.1\ncolumns:\n  - id: todo\n    name: To do\n---\n",
+        )
+        .expect("board");
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        std::fs::write(
+            dir.path().join("cards/a.md"),
+            "---\ntitle: A\ncolumn: todo\norder: 1000\narchived: true\n---\n",
+        )
+        .expect("a");
+        let view = load_view(dir.path());
+        let cards = &view.columns.first().expect("column").cards;
+        assert_eq!(cards.len(), 1);
+        assert!(cards.first().expect("card").archived);
+        assert!(view.archived.is_empty());
+    }
+
+    /// A board for the search tests: two cards mentioning the parser (one archived), one that
+    /// does not, and a column and board title of their own.
+    fn search_board(dir: &tempfile::TempDir) {
+        std::fs::write(
+            dir.path().join("board.md"),
+            "---\nmarkban: 0.1\ntitle: Roadmap\ncolumns:\n  - id: todo\n    name: To do\n---\n\nThe plan.\n",
+        )
+        .expect("board");
+        std::fs::create_dir(dir.path().join("cards")).expect("cards");
+        std::fs::write(
+            dir.path().join("cards/0001-a.md"),
+            "---\ntitle: Fix the parser\ncolumn: todo\n---\n\nThe parser crashes on empty input.\n",
+        )
+        .expect("a");
+        std::fs::write(
+            dir.path().join("cards/0002-b.md"),
+            "---\ntitle: Old thing\ncolumn: todo\narchived: true\n---\n\nThe parser was slow once.\n",
+        )
+        .expect("b");
+        std::fs::write(
+            dir.path().join("cards/0003-c.md"),
+            "---\ntitle: Unrelated\ncolumn: nowhere\n---\n\nNothing here.\n",
+        )
+        .expect("c");
+    }
+
+    #[test]
+    fn load_search_splits_terms_and_returns_the_hits() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        search_board(&dir);
+
+        // Every term must match (case-insensitive); active cards come first, archived by id.
+        let hits = load_search(dir.path(), "PARSER  the\t").expect("hits");
+        assert_eq!(
+            hits.cards.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["0001-a", "0002-b"],
+            "both terms in the id, title or description"
+        );
+        assert!(!hits.cards[0].archived);
+        assert!(hits.cards[1].archived, "the archived card is a hit too");
+        assert_eq!(hits.cards[1].column.as_deref(), Some("todo"));
+        assert!(hits.columns.is_empty() && !hits.board);
+        assert!(
+            hits.cards[0].snippet.is_none() && hits.cards[1].snippet.is_some(),
+            "a snippet only for terms that matched just the description"
+        );
+        let hits = load_search(dir.path(), "parser crashes").expect("hits");
+        assert_eq!(hits.cards.len(), 1);
+        assert_eq!(
+            hits.cards[0]
+                .snippet
+                .as_ref()
+                .map(|s| (s.line, s.text.as_str())),
+            Some((1, "The parser crashes on empty input."))
+        );
+
+        // Column hits by id or name, and the board title/description.
+        let hits = load_search(dir.path(), "todo").expect("hits");
+        assert_eq!(
+            hits.columns,
+            vec![markban_core::search::ColumnHit {
+                id: "todo".to_string(),
+                name: "To do".to_string()
+            }]
+        );
+        let hits = load_search(dir.path(), "roadmap plan").expect("hits");
+        assert!(hits.board && hits.cards.is_empty() && hits.columns.is_empty());
+
+        // A query without terms gives empty results, and so does an unreadable board.
+        for query in ["", "   \t "] {
+            let hits = load_search(dir.path(), query).expect("hits");
+            assert!(hits.cards.is_empty() && hits.columns.is_empty() && !hits.board);
+        }
+        let too_long = "a".repeat(257);
+        let error = load_search(dir.path(), &too_long).expect_err("refused");
+        assert!(error.contains("257") && !error.contains('\n'), "{error}");
+        let empty = tempfile::tempdir().expect("tempdir");
+        let hits = load_search(empty.path(), "parser").expect("hits");
+        assert!(hits.cards.is_empty() && hits.columns.is_empty() && !hits.board);
+    }
+
+    #[tokio::test]
+    async fn state_search_runs_off_the_async_workers() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        search_board(&dir);
+        let (watcher, rx) = Watcher::start(dir.path()).expect("watcher");
+        let state = State {
+            dir: dir.path().to_path_buf(),
+            rx,
+            watcher,
+        };
+        let hits = state.search("parser").await.expect("search");
+        assert_eq!(
+            hits.cards.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            vec!["0001-a", "0002-b"]
+        );
     }
 
     #[tokio::test]

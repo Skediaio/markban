@@ -27,12 +27,16 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 | 13 | Viewer hosting: one shared password, board from a git repository, Dockerfile | Done 2026-11-21 |
 | 14 | Viewer: syntax highlighting of fenced code in cards (server-side, syntect) | Done 2026-11-21 |
 | 15 | Release binaries and one-line install (CLI + skill) | Done 2026-11-21 |
+| 16 | Card archive: `archived` frontmatter key, `card.archive`/`card.unarchive`, hidden by default in CLI, viewer (read-only "Show archived" toggle) and packages | Done 2026-11-22 |
+| 17 | Search: linear scan in core, `markban search` (local + remote), viewer search box, `@markban/core` API | Done 2026-11-22 |
 
 ## Open
 
 - `@markban/svelte`: check Escape, focus return and live reload in a real browser (tests use a simulated DOM).
 
 - Viewer: render task-list items as checkboxes; show the column name instead of its id in the card detail.
+- Viewer: search results do not refresh while the board changes under an active query (the list catches
+  up on the next keystroke; an open card modal does refresh).
 - Independent review of iteration 1.
 - Viewer hosting: sessions live in memory (a restart logs everyone out); without `MARKBAN_TRUST_PROXY=1`
   all clients share one failed-login counter, because the Dioxus server does not expose the peer address.
@@ -42,4 +46,4 @@ Iteration 1: agents run a board through `markban`, people watch it in a read-onl
 
 ## Out of scope for iteration 1
 
-A database, MCP, archive, labels and other reserved card keys.
+A database, MCP, labels and other reserved card keys.

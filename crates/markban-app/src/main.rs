@@ -10,8 +10,9 @@ mod git;
 #[cfg(feature = "server")]
 mod server;
 
-use api::{auth_enabled, get_card, wait_for_change};
+use api::{auth_enabled, get_card, search, wait_for_change};
 use dioxus::prelude::*;
+use markban_core::search::SearchResults;
 use markban_core::view::{BoardView, CardSummary};
 
 const STYLE: Asset = asset!("/assets/main.css");
@@ -107,16 +108,66 @@ fn App() -> Element {
 
 #[component]
 fn BoardPage(view: BoardView, selected: Signal<Option<String>>) -> Element {
+    // Viewer state only: whether archived cards show, and the search query.
+    // Nothing is written.
+    let mut show_archived = use_signal(|| false);
+    let mut query = use_signal(String::new);
+    // Debounced search: every keystroke restarts the resource, so only a query that settles
+    // for 200 ms reaches the server. An empty query never asks, and clearing it brings the
+    // board back without any refetch of its own.
+    let results = use_resource(move || {
+        let query = query().trim().to_string();
+        async move {
+            if query.is_empty() {
+                None
+            } else {
+                sleep_ms(200).await;
+                Some(search(query).await)
+            }
+        }
+    });
     let title = if view.title.is_empty() {
         "Untitled board".to_string()
     } else {
         view.title.clone()
     };
+    let unsorted = visible(&view.unsorted, show_archived());
     rsx! {
         header { class: "board-head",
             h1 { "{title}" }
             if !view.description.is_empty() {
                 p { class: "description", "{view.description}" }
+            }
+            div { class: "search",
+                input {
+                    class: "search-input",
+                    r#type: "search",
+                    placeholder: "Search…",
+                    "aria-label": "Search the board",
+                    value: "{query()}",
+                    oninput: move |e| query.set(e.value()),
+                    onkeydown: move |e| {
+                        if e.key() == Key::Escape {
+                            query.set(String::new());
+                        }
+                    },
+                }
+                if !query().is_empty() {
+                    button {
+                        class: "search-clear",
+                        "aria-label": "Clear search",
+                        onclick: move |_| query.set(String::new()),
+                        "\u{d7}"
+                    }
+                }
+            }
+            label { class: "archived-toggle",
+                input {
+                    r#type: "checkbox",
+                    checked: show_archived(),
+                    onchange: move |e| show_archived.set(e.checked()),
+                }
+                "Show archived"
             }
         }
         if !view.diagnostics.is_empty() {
@@ -129,12 +180,90 @@ fn BoardPage(view: BoardView, selected: Signal<Option<String>>) -> Element {
                 }
             }
         }
-        div { class: "columns",
-            for column in view.columns.iter() {
-                Column { key: "{column.id}", name: column.name.clone(), cards: column.cards.clone(), selected }
+        if query().trim().is_empty() {
+            div { class: "columns",
+                for column in view.columns.iter() {
+                    Column {
+                        key: "{column.id}",
+                        name: column.name.clone(),
+                        cards: visible(&column.cards, show_archived()),
+                        selected,
+                    }
+                }
+                if !unsorted.is_empty() {
+                    Column { name: "Unsorted", cards: unsorted, selected, muted: true }
+                }
             }
-            if !view.unsorted.is_empty() {
-                Column { name: "Unsorted", cards: view.unsorted.clone(), selected, muted: true }
+        } else {
+            match &*results.read() {
+                Some(Some(Ok(hits))) => rsx! {
+                    SearchResultsPanel { hits: hits.clone(), view: view.clone(), selected }
+                },
+                Some(Some(Err(e))) => rsx! { p { class: "banner error", "Search failed: {e}" } },
+                _ => rsx! { p { class: "search-hint", "Searching…" } },
+            }
+        }
+    }
+}
+
+/// The cards to show: archived ones only when the viewer asked for them.
+fn visible(cards: &[CardSummary], show_archived: bool) -> Vec<CardSummary> {
+    cards
+        .iter()
+        .filter(|c| show_archived || !c.archived)
+        .cloned()
+        .collect()
+}
+
+/// The displayed column name of a card hit: its column id resolved through the view, or
+/// "Unsorted" (a hit's `column` is an id, `None` for a card without a valid one).
+fn hit_column_name(view: &BoardView, column: Option<&str>) -> String {
+    column
+        .and_then(|id| view.columns.iter().find(|c| c.id == id))
+        .map_or_else(|| "Unsorted".to_string(), |c| c.name.clone())
+}
+
+#[component]
+fn SearchResultsPanel(
+    hits: SearchResults,
+    view: BoardView,
+    selected: Signal<Option<String>>,
+) -> Element {
+    let total = hits.cards.len() + hits.columns.len() + usize::from(hits.board);
+    let title = if view.title.is_empty() {
+        "Untitled board".to_string()
+    } else {
+        view.title.clone()
+    };
+    rsx! {
+        section { class: "search-results",
+            p { class: "search-count", "{total} hit(s)" }
+            if !hits.cards.is_empty() {
+                ul { class: "cards search-cards",
+                    for hit in hits.cards.iter() {
+                        li { key: "{hit.id}",
+                            button {
+                                class: "card",
+                                onclick: {
+                                    let id = hit.id.clone();
+                                    move |_| selected.set(Some(id.clone()))
+                                },
+                                span { class: "card-id", "{hit.id}" }
+                                "{hit.title}"
+                                span { class: "hit-column", "{hit_column_name(&view, hit.column.as_deref())}" }
+                                if hit.archived {
+                                    span { class: "hit-archived", "(archived)" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            for column in hits.columns.iter() {
+                p { class: "search-extra", key: "column-{column.id}", "Column: {column.name}" }
+            }
+            if hits.board {
+                p { class: "search-extra", "Board: {title}" }
             }
         }
     }
@@ -158,12 +287,15 @@ fn Column(
                 for card in cards {
                     li { key: "{card.id}",
                         button {
-                            class: "card",
+                            class: if card.archived { "card archived" } else { "card" },
                             onclick: {
                                 let id = card.id.clone();
                                 move |_| selected.set(Some(id.clone()))
                             },
                             "{card.title}"
+                            if card.archived {
+                                span { class: "badge-archived", "archived" }
+                            }
                         }
                     }
                 }
@@ -206,7 +338,12 @@ fn CardModal(id: String, rev: u64, selected: Signal<Option<String>>) -> Element 
                 match &*detail.read() {
                     Some(Ok(card)) => rsx! {
                         h2 { "{card.title}" }
-                        p { class: "meta", "Column: {card.column}" }
+                        p { class: "meta",
+                            "Column: {card.column}"
+                            if card.archived {
+                                span { class: "badge-archived", "archived" }
+                            }
+                        }
                         div { class: "markdown", dangerous_inner_html: "{card.html}" }
                     },
                     Some(Err(e)) => rsx! { p { class: "banner error", "{e}" } },

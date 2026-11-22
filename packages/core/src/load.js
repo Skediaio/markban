@@ -148,16 +148,17 @@ function unreadable(file, error) {
 }
 
 /**
- * Loads a board directory once and gives access to its view and cards.
+ * Loads a board directory once and gives access to its view, its cards and its raw files (for
+ * `search`).
  * @param {string} dir
- * @returns {{ view: BoardView, card: (id: string) => CardDetail | null }}
+ * @returns {{ view: BoardView, card: (id: string) => CardDetail | null, files: BoardFile[] }}
  * @throws {Error} `dir` is not a directory.
  */
 export function openBoard(dir) {
   const { files, diagnostics } = readBoardFiles(dir);
   const view = parseBoard(files);
   view.diagnostics = [...view.diagnostics, ...diagnostics].sort(compareDiagnostics);
-  return { view, card: (id) => card(files, id) };
+  return { view, card: (id) => card(files, id), files };
 }
 
 /**

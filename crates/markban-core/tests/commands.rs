@@ -38,6 +38,8 @@ fn every_command_parses_from_json() {
         r#"{"cmd":"card.move","id":"x","column":"A","top":true}"#,
         r#"{"cmd":"card.edit","id":"x","title":"T","description":"d","append":"a"}"#,
         r#"{"cmd":"card.remove","id":"x"}"#,
+        r#"{"cmd":"card.archive","id":"x"}"#,
+        r#"{"cmd":"card.unarchive","id":"x"}"#,
         r#"{"cmd":"column.add","name":"N","id":"n","before":"A"}"#,
         r#"{"cmd":"column.rename","column":"A","name":"N"}"#,
         r#"{"cmd":"column.move","column":"A","before":"B"}"#,
@@ -378,6 +380,196 @@ fn remove_deletes_only_that_file() {
     assert!(run_err(dir.path(), r#"{"cmd":"card.remove","id":"a"}"#).contains("'a'"));
 }
 
+// ---- card.archive / card.unarchive ----
+
+#[test]
+fn archive_adds_one_line_and_unarchive_restores_the_original_bytes() {
+    let dir = temp_board();
+    let original = read(dir.path(), "cards/b.md");
+    assert_eq!(
+        run_one(dir.path(), r#"{"cmd":"card.archive","id":"b"}"#),
+        "b"
+    );
+    let after = read(dir.path(), "cards/b.md");
+    // exactly one added line `archived: true`, nothing else changed
+    assert_eq!(
+        after.lines().count(),
+        original.lines().count() + 1,
+        "{original}\n----\n{after}"
+    );
+    assert_eq!(
+        after.replace("archived: true\n", ""),
+        original,
+        "{original}\n----\n{after}"
+    );
+    // every other file is untouched
+    let fresh = temp_board();
+    for file in [
+        "board.md",
+        "cards/a.md",
+        "cards/c.md",
+        "cards/d.md",
+        "cards/e.md",
+    ] {
+        assert_eq!(read(dir.path(), file), read(fresh.path(), file), "{file}");
+    }
+    // and unarchive reproduces the original bytes exactly
+    assert_eq!(
+        run_one(dir.path(), r#"{"cmd":"card.unarchive","id":"b"}"#),
+        "b"
+    );
+    assert_eq!(read(dir.path(), "cards/b.md"), original);
+}
+
+#[test]
+fn archive_keeps_crlf_cards_crlf() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\n---\r\n\r\nBody\r\n",
+    )
+    .unwrap();
+    run_one(dir.path(), r#"{"cmd":"card.archive","id":"w"}"#);
+    assert_eq!(
+        read(dir.path(), "cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\narchived: true\r\n---\r\n\r\nBody\r\n"
+    );
+    run_one(dir.path(), r#"{"cmd":"card.unarchive","id":"w"}"#);
+    assert_eq!(
+        read(dir.path(), "cards/w.md"),
+        "---\r\ntitle: W\r\ncolumn: todo\r\norder: 9000\r\n---\r\n\r\nBody\r\n"
+    );
+}
+
+#[test]
+fn move_on_an_archived_card_is_refused_but_edit_works() {
+    let dir = temp_board();
+    run_one(dir.path(), r#"{"cmd":"card.archive","id":"a"}"#);
+    let e = run_err(dir.path(), r#"{"cmd":"card.move","id":"a","top":true}"#);
+    assert_eq!(
+        e,
+        "command 1: card 'a' is archived; run card.unarchive first"
+    );
+    assert_eq!(
+        run_one(dir.path(), r#"{"cmd":"card.edit","id":"a","title":"A2"}"#),
+        "a"
+    );
+    let card = read(dir.path(), "cards/a.md");
+    assert!(
+        card.contains("title: A2") && card.contains("archived: true"),
+        "{card}"
+    );
+}
+
+#[test]
+fn anchoring_on_an_archived_card_is_refused() {
+    let dir = temp_board();
+    run_one(dir.path(), r#"{"cmd":"card.archive","id":"b"}"#);
+    for json in [
+        r#"{"cmd":"card.add","title":"x","before":"b"}"#,
+        r#"{"cmd":"card.add","title":"x","after":"b"}"#,
+        r#"{"cmd":"card.move","id":"a","before":"b"}"#,
+    ] {
+        assert_eq!(
+            run_err(dir.path(), json),
+            "command 1: anchor card 'b' is archived; anchor on an active card or run card.unarchive first",
+            "{json}"
+        );
+    }
+}
+
+#[test]
+fn archive_and_unarchive_refusals() {
+    let dir = temp_board();
+    assert!(run_err(dir.path(), r#"{"cmd":"card.archive","id":"zzz"}"#).contains("no card 'zzz'"));
+    run_one(dir.path(), r#"{"cmd":"card.archive","id":"a"}"#);
+    assert_eq!(
+        run_err(dir.path(), r#"{"cmd":"card.archive","id":"a"}"#),
+        "command 1: card 'a' is already archived"
+    );
+    assert_eq!(
+        run_err(dir.path(), r#"{"cmd":"card.unarchive","id":"b"}"#),
+        "command 1: card 'b' is not archived"
+    );
+    // a card without valid frontmatter is refused like card.edit
+    std::fs::write(dir.path().join("cards/x.md"), "no frontmatter\n").unwrap();
+    for json in [
+        r#"{"cmd":"card.archive","id":"x"}"#,
+        r#"{"cmd":"card.unarchive","id":"x"}"#,
+    ] {
+        assert!(
+            run_err(dir.path(), json).contains("card 'x' has no valid frontmatter (E006)"),
+            "{json}"
+        );
+    }
+}
+
+#[test]
+fn archived_cards_are_invisible_to_position_computation() {
+    let dir = temp_board();
+    std::fs::write(
+        dir.path().join("cards/arch.md"),
+        "---\ntitle: Arch\ncolumn: doing\norder: 100\narchived: true\n---\n",
+    )
+    .unwrap();
+    let order_of = |card: &str| {
+        dec(read(dir.path(), &format!("cards/{card}.md"))
+            .lines()
+            .find(|l| l.starts_with("order:"))
+            .unwrap()
+            .trim_start_matches("order: "))
+    };
+    // the end derives from the active d (1000), not from the archived 100
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"End","column":"doing"}"#,
+    );
+    assert!(order_of("end") > dec("1000"), "{:?}", order_of("end"));
+    // the top likewise
+    run_one(
+        dir.path(),
+        r#"{"cmd":"card.add","title":"Top","column":"doing","top":true}"#,
+    );
+    assert!(order_of("top") < dec("1000"), "{:?}", order_of("top"));
+    assert_eq!(column_ids(dir.path(), "doing"), ["top", "d", "end"]);
+}
+
+#[test]
+fn column_remove_counts_archived_cards_and_moves_them_along() {
+    let dir = temp_board();
+    for (id, order) in [("ar1", "100"), ("ar2", "200")] {
+        std::fs::write(
+            dir.path().join(format!("cards/{id}.md")),
+            format!("---\ntitle: {id}\ncolumn: done\norder: {order}\narchived: true\n---\n"),
+        )
+        .unwrap();
+    }
+    // done now holds e (active) and ar1, ar2 (archived): 3 cards, 2 archived
+    let e = run_err(dir.path(), r#"{"cmd":"column.remove","column":"done"}"#);
+    assert!(
+        e.contains("3 card(s) (2 archived)") && e.contains("move_to"),
+        "{e}"
+    );
+    assert!(read(dir.path(), "board.md").contains("id: done"));
+    assert_eq!(
+        run_one(
+            dir.path(),
+            r#"{"cmd":"column.remove","column":"done","move_to":"doing"}"#
+        ),
+        "done"
+    );
+    assert!(!read(dir.path(), "board.md").contains("id: done"));
+    // the active card is appended at the end of the target
+    assert_eq!(column_ids(dir.path(), "doing"), ["d", "e"]);
+    // the archived ones keep `archived: true` and their order; only the column changes
+    for (id, order) in [("ar1", "100"), ("ar2", "200")] {
+        assert_eq!(
+            read(dir.path(), &format!("cards/{id}.md")),
+            format!("---\ntitle: {id}\ncolumn: doing\norder: {order}\narchived: true\n---\n")
+        );
+    }
+}
+
 // ---- columns ----
 
 #[test]
@@ -483,6 +675,33 @@ fn column_remove_with_move_to_appends_cards_in_relative_order() {
     assert!(!read(dir.path(), "board.md").contains("id: todo"));
     assert_eq!(column_ids(dir.path(), "doing"), ["d", "a", "b", "c"]);
     assert!(read(dir.path(), "cards/a.md").contains("column: doing"));
+}
+
+#[test]
+fn column_remove_keeps_order_when_id_order_disagrees() {
+    let dir = temp_board();
+    // ids sort a < m < z, but `order` says z, m, a; plus an archived card that only changes column
+    for (id, order, extra) in [
+        ("a9", "3000", ""),
+        ("m9", "2000", ""),
+        ("z9", "1000", ""),
+        ("b0", "500", "archived: true\n"),
+    ] {
+        std::fs::write(
+            dir.path().join(format!("cards/{id}.md")),
+            format!("---\ntitle: {id}\ncolumn: doing\norder: {order}\n{extra}---\n"),
+        )
+        .unwrap();
+    }
+    run_one(
+        dir.path(),
+        r#"{"cmd":"column.remove","column":"doing","move_to":"todo"}"#,
+    );
+    let ids = column_ids(dir.path(), "todo");
+    let pos = |id: &str| ids.iter().position(|i| i == id).unwrap();
+    assert!(pos("z9") < pos("m9") && pos("m9") < pos("a9"), "{ids:?}");
+    assert!(!ids.contains(&"b0".to_string()), "archived stays hidden");
+    assert!(read(dir.path(), "cards/b0.md").contains("column: todo"));
 }
 
 #[test]

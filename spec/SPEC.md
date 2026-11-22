@@ -93,6 +93,7 @@ Sessions expire after 5 minutes instead of 30.
 | `title` | yes | One line. |
 | `column` | yes | A `columns[].id` of `board.md`. |
 | `order` | no | Decimal number matching `-?[0-9]+(\.[0-9]+)?` (`-12`, `1500`, `1500.25`). Sort key within the column, ascending. |
+| `archived` | no | Only `true` is valid: the card is archived — hidden from listings and viewers by default (a viewer may offer a read-only "show archived" switch), not counted for positions or `W002`. Any other value is `W003` and the card counts as active. |
 
 Everything after the closing `---` is the description, free Markdown. Unknown keys are preserved.
 
@@ -101,6 +102,9 @@ A card whose `order` is invalid (E008) counts as a card without `order`.
 
 A tool that places a card at the end of a column that has cards without `order` leaves `order` out of the
 card (it would otherwise sort before those cards); the card then sorts by id among the unordered ones.
+
+An archived card keeps its `column` and `order`; `card.unarchive` puts it back exactly there. If another card took that `order` in the meantime, the two tie
+(sorted by id) and `W002` warns; the tie is not repaired.
 
 ## 5. Rules for writers
 
@@ -115,8 +119,10 @@ These rules hold for agents editing by hand and for tools.
   renumber other cards.
 - **Edit a card**: change `title` or the description in its file.
 - **Remove a card**: delete its file. Git history is the undo.
+- **Archive a card**: add `archived: true` to its frontmatter; the card keeps its `column` and `order`.
+  **Unarchive**: remove that line.
 - **Add, rename or reorder a column**: edit `columns` in `board.md`. Keep every `id`.
-- **Remove a column**: only when no card refers to it; move or remove its cards first.
+- **Remove a column**: only when no card refers to it (archived cards count); move or remove its cards first.
 - Preserve unknown keys, lines and content. Keep line endings as they are.
 - Never write a file partially: write a temporary file next to it and rename it into place.
 - Tools that write take an exclusive advisory lock on `.markban.lock` in the board directory for the whole
@@ -147,7 +153,8 @@ Warnings do not make a board invalid:
 | Code | Meaning |
 |---|---|
 | `W001` | A file or directory in `cards/` that is not `<id>.md`, or a symbolic link (`symbolic link ignored`). `.markban.lock` is not reported. |
-| `W002` | Two cards in one column with the same `order` (ties sort by id). |
+| `W002` | Two active cards in one column with the same `order` (ties sort by id). |
+| `W003` | `archived` with a value other than `true`; the card counts as active. |
 
 A viewer shows cards with an unknown column in an extra "Unsorted" column and still renders the rest.
 
@@ -164,6 +171,8 @@ Column parameters accept an id or a name (case-insensitive). Positions are ancho
 | `card.move` | `id`, `column?`, position† |
 | `card.edit` | `id`, `title?`, `description?`, `append?`, `if_unchanged?`‡ |
 | `card.remove` | `id` |
+| `card.archive` | `id` |
+| `card.unarchive` | `id` |
 | `column.add` | `name`, `id?`, `before?` (column; default: end) |
 | `column.rename` | `column`, `name` |
 | `column.move` | `column`, `before?` (column; default: end) |
@@ -182,16 +191,26 @@ Orders written by hand may have any number of decimals. For the end and the top 
 the integer ceiling or floor of the extreme order. Between two cards it works at one decimal more than the
 longest neighbour (at least 6, at most 18) and refuses beyond that.
 
+Archived cards do not count for positions: not for the top or the end of a column, not as a neighbour for
+`order`, not for `W002`. A position pointing at an archived card (`before`/`after`) is refused, and so is
+`card.move` on an archived card ("card X is archived; run card.unarchive first"); `card.edit` is allowed.
+`card.unarchive` restores the card in its own column with its own order. `column.remove` counts archived cards
+too: with `move_to` they move along, without it the command is refused with the counts ("column done still has
+3 cards (2 archived); pass move_to").
+
 ## 8. Agent quick reference
 
 ```
 markban init "Title" COL...      # create a board in the current directory
-markban ls                      # whole board, one line per card
+markban ls [Column] [--archived] # whole board, one line per card
 markban show <id>               # one card with its description
+markban search <term>…          # every card, column and board field with all terms
 markban add "Title" [-c Doing] [-d "text"] [--top | --before <id> | --after <id>]
 markban mv <id> [Column] [--top | --before <id> | --after <id>]
 markban edit <id> [--title "..."] [-d "..." | --append "..."]
 markban rm <id>
+markban archive <id>            # hide a done card; its file, column and place stay
+markban unarchive <id>          # back, in its old column and place
 markban col add|rename|mv|rm ...
 markban run < commands.jsonl    # many commands, all or nothing
 markban check
@@ -199,9 +218,21 @@ markban check
 
 Success prints the affected id only. An error is one line saying what is wrong and what is valid.
 `markban ls` prints at most one line about problems (`! N problem(s); run markban check`); `markban check`
-prints them all. Text output replaces control characters from board content (except newline and tab) with
-U+FFFD, so a board cannot inject terminal escape sequences; `--json` output is exact. `-d -` and
-`--append -` read the text from stdin.
+prints them all. Archived cards are not listed: `ls` ends with `N archived card(s); markban ls --archived`,
+and `--archived` lists only them. Text output replaces control characters from board content (except
+newline and tab) with U+FFFD, so a board cannot inject terminal escape sequences; `--json` output is exact.
+`-d -` and `--append -` read the text from stdin.
+
+**Search.** `markban search <term> [<term>…]` matches every term (case-insensitive, literal substring, no
+wildcards or patterns) somewhere in the searched text; a hit needs all terms. Searched text: per card its id,
+title and description; per column its id and name; and the board title and description. Cards print in `ls`
+order as `<id>  <title>  <column>`, with `(archived)` appended for archived cards and, when a term matched
+only the description, the first matching description line as an indented snippet (`:<line no>: <trimmed
+text>`). Matching columns print `column <id>  <name>`, a matching board `board  <title>`, after the cards.
+Repeated terms count once; a search takes at most 32 distinct terms of at most 256 bytes each, and anything
+over that is refused with one line (code 1 in the CLI, 400 on the server). No hits print `0 hit(s)`; exit
+code 0 either way. `--json` prints the hits as JSON. No index is read or
+written: the scan runs over the parsed board.
 
 Exit codes:
 
@@ -303,6 +334,8 @@ refused with code 1 and one line.
 | time to send the request headers, and keep-alive idle time | 10 s | | connection closed |
 | open connections | 256 | | wait in the listen queue |
 | blocking file-system jobs, over all boards | 16 | | wait |
+| search terms per query, after removing duplicates | 32 | | 400, code 1 |
+| bytes per search term | 256 | | 400, code 1 |
 
 Runs on one board wait for each other without holding a file-system thread, so a busy board never stalls the
 others.
@@ -321,9 +354,9 @@ set `MARKBAN_ALLOWED_HOSTS` to the public host name the proxy forwards. The prox
 limiting and per-client connection limits, and limits on slow clients beyond the header and request timeouts
 above; the server has no notion of client addresses.
 
-**CLI remote mode.** With `MARKBAN_URL` (or `--url`) set, every board command (`ls`, `show`, `add`, `mv`,
-`edit`, `rm`, `col`, `init`, `run`, `check`) sends the same commands to the server and prints the same output
-with the same exit codes as locally. The token comes from `MARKBAN_TOKEN` (`--token` works but shows in the
+**CLI remote mode.** With `MARKBAN_URL` (or `--url`) set, every board command (`ls`, `show`, `search`, `add`,
+`mv`, `edit`, `rm`, `archive`, `unarchive`, `col`, `init`, `run`, `check`) sends the same commands to the
+server and prints the same output with the same exit codes as locally. The token comes from `MARKBAN_TOKEN` (`--token` works but shows in the
 process list); the board from `-b <id>` or `MARKBAN_BOARD`, which is a board id in remote mode and a
 directory locally. `-C` is refused in remote mode. Two commands only work remotely: `markban boards [--json]`
 and `markban log [-n N]` (JSON lines). A network failure is one line with exit code 1.
@@ -336,5 +369,5 @@ the environment, so a proxy set there sees the server's host name (for `https://
 
 ## Reserved for later versions
 
-Labels, assignees, due dates, WIP limits, checklists, comments, archive, attachments, card relations. Tools
+Labels, assignees, due dates, WIP limits, checklists, comments, attachments, card relations. Tools
 preserve such keys and content today; they get a meaning in a later version.

@@ -502,6 +502,7 @@ mod tests {
             Router::new()
                 .route("/", get(|| async { "the board" }))
                 .route("/api/get_board", post(|| async { "board json" }))
+                .route("/api/search", post(|| async { "search json" }))
                 .route("/healthz", get(|| async { "ok" }))
                 .layer(dioxus::server::axum::middleware::from_fn_with_state(
                     Arc::clone(auth),
@@ -555,6 +556,14 @@ mod tests {
             let (status, _, body) = send(&auth, request).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED);
             assert!(!body.contains("board json"));
+            let request = Request::builder()
+                .method("POST")
+                .uri("/api/search")
+                .body(Body::empty())
+                .expect("request");
+            let (status, _, body) = send(&auth, request).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "the search read too");
+            assert!(!body.contains("search json"), "{body}");
             let (status, _, body) = send(&auth, get_req("/", Some("markban_session=forged"))).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
         }

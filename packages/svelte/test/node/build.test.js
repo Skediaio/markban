@@ -3,10 +3,15 @@ import { buildBoardModule } from '../../src/build.js';
 import { demoBoard, hostileBoard } from '../helpers.js';
 
 describe('buildBoardModule', () => {
-  test('gives the view and sanitised html for every card', () => {
+  test('gives the view, the raw files and sanitised html for every card', () => {
     const board = buildBoardModule(demoBoard);
     expect(board.view.title).toBe('Markban roadmap');
-    const ids = [...board.view.columns.flatMap((c) => c.cards), ...board.view.unsorted].map((c) => c.id);
+    expect(board.files.map((f) => f.path)).toContain('board.md');
+    const ids = [
+      ...board.view.columns.flatMap((c) => c.cards),
+      ...board.view.unsorted,
+      ...board.view.archived,
+    ].map((c) => c.id);
     expect(Object.keys(board.cards).sort()).toEqual(ids.sort());
     const first = board.cards[ids[0]];
     expect(first.title).toBeTruthy();
@@ -25,5 +30,11 @@ describe('buildBoardModule', () => {
   test('records the column name of a card', () => {
     const { cards } = buildBoardModule(hostileBoard);
     expect(Object.values(cards).find((c) => c.title === 'A fine card')?.column).toBe('Done');
+  });
+
+  test('an archived card keeps its column name and description', () => {
+    const { cards } = buildBoardModule(demoBoard);
+    expect(cards['0004-research']).toMatchObject({ title: 'Format experiments', column: 'Done' });
+    expect(cards['0004-research'].html).toContain('kept for reference');
   });
 });

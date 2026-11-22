@@ -107,6 +107,8 @@ fn command() -> impl Strategy<Value = Command> {
             }
         ),
         text().prop_map(|id| Command::CardRemove { id }),
+        text().prop_map(|id| Command::CardArchive { id }),
+        text().prop_map(|id| Command::CardUnarchive { id }),
         (text(), opt(), opt()).prop_map(|(name, id, before)| Command::ColumnAdd {
             name,
             id,

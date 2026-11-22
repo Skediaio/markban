@@ -50,6 +50,9 @@ pub enum Cmd {
     Ls {
         /// Only this column (id or name, or "unsorted").
         column: Option<String>,
+        /// Show only the archived cards.
+        #[arg(long, conflicts_with = "column")]
+        archived: bool,
         /// Print the board view as JSON.
         #[arg(long)]
         json: bool,
@@ -58,6 +61,15 @@ pub enum Cmd {
     Show {
         id: String,
         /// Print the card as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search cards, columns and the board; a hit contains every term.
+    Search {
+        /// Terms to find (case-insensitive, literal substrings; all of them required).
+        #[arg(required = true, value_name = "TERM")]
+        terms: Vec<String>,
+        /// Print the hits as JSON.
         #[arg(long)]
         json: bool,
     },
@@ -101,6 +113,10 @@ pub enum Cmd {
     },
     /// Remove a card.
     Rm { id: String },
+    /// Archive a card: hide it from listings, keep its file and place.
+    Archive { id: String },
+    /// Put an archived card back, in its old column and place.
+    Unarchive { id: String },
     /// Add, rename, move or remove columns.
     #[command(subcommand)]
     Col(ColCmd),

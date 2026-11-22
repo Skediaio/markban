@@ -2,6 +2,7 @@
 
 use markban_core::command::Command;
 use markban_core::fs::EXIT_INVALID;
+use markban_core::search::SearchResults;
 use markban_core::view::{BoardView, CardDetail};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -70,7 +71,8 @@ pub struct Remote {
     board: Option<String>,
 }
 
-/// Percent-encodes everything but unreserved characters, for one path segment.
+/// Percent-encodes everything but unreserved characters, for one path segment or a
+/// query-string value (a space becomes `%20`).
 fn encode_segment(text: &str) -> String {
     text.bytes()
         .map(|b| {
@@ -265,6 +267,17 @@ impl Remote {
     /// [`RemoteError`].
     pub fn card(&self, id: &str) -> Result<CardDetail, RemoteError> {
         let path = format!("{}/cards/{}", self.board_path()?, encode_segment(id));
+        self.get(&path)
+    }
+
+    /// The hits of a full-board search. `terms` hold no ASCII whitespace (the CLI splits on
+    /// it), so joining with a space round-trips through the server's `q`.
+    ///
+    /// # Errors
+    /// [`RemoteError`].
+    pub fn search(&self, terms: &[String]) -> Result<SearchResults, RemoteError> {
+        let q = encode_segment(&terms.join(" "));
+        let path = format!("{}/search?q={q}", self.board_path()?);
         self.get(&path)
     }
 

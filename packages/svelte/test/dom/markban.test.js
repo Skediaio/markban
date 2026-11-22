@@ -1,5 +1,5 @@
 import { describe, expect, inject, test } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import Markban from '../../src/Markban.svelte';
 
 // Built in Node by test/boards.setup.js: the browser build of @markban/core cannot read files.
@@ -112,5 +112,66 @@ describe('<Markban>', () => {
     const { container } = render(Markban, { board: view });
     expect(container.querySelector('.markban-notice-error')).not.toBeNull();
     expect(container.querySelector('.markban-board')).toBeNull();
+  });
+});
+
+describe('<Markban> search box', () => {
+  test('full-text search replaces the columns with the hits', async () => {
+    const { container } = render(Markban, { board: demo });
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'experiments' } });
+    await waitFor(() => expect(screen.getByText('2 hit(s)')).toBeTruthy());
+    expect(container.querySelector('.markban-columns')).toBeNull();
+    const found = [...container.querySelectorAll('.markban-search-cards .markban-card')];
+    expect(found.map((li) => li.getAttribute('data-card'))).toEqual([
+      '0001-spec-draft',
+      '0004-research',
+    ]);
+    expect(found[1].textContent).toContain('Done', 'the muted column name');
+    expect(found[1].textContent).toContain('(archived)');
+  });
+
+  test('a hit opens the card dialog, an archived one included', async () => {
+    const { container } = render(Markban, { board: demo });
+    const dialog = /** @type {HTMLDialogElement} */ (container.querySelector('dialog'));
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'experiments' } });
+    await waitFor(() => expect(screen.getByText('2 hit(s)')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: /Format experiments/ }));
+    expect(dialog.open).toBe(true);
+    expect(dialog.textContent).toContain('kept for reference', 'the archived card keeps its body');
+  });
+
+  test('column and board hits are lines, and a miss says 0', async () => {
+    const { container } = render(Markban, { board: demo });
+    const box = screen.getByRole('searchbox');
+    await fireEvent.input(box, { target: { value: 'backlog' } });
+    await waitFor(() => expect(container.textContent).toContain('Column: Backlog'));
+    expect(container.querySelectorAll('.markban-card')).toHaveLength(0);
+    await fireEvent.input(box, { target: { value: 'roadmap' } });
+    await waitFor(() => expect(container.textContent).toContain('Board: Markban roadmap'));
+    await fireEvent.input(box, { target: { value: 'zzz' } });
+    await waitFor(() => expect(screen.getByText('0 hit(s)')).toBeTruthy());
+  });
+
+  test('clearing with the × button or Escape brings the board back', async () => {
+    const { container } = render(Markban, { board: demo });
+    const box = /** @type {HTMLInputElement} */ (screen.getByRole('searchbox'));
+    await fireEvent.input(box, { target: { value: 'experiments' } });
+    await waitFor(() => expect(screen.getByText('2 hit(s)')).toBeTruthy());
+    await fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
+    await waitFor(() => expect(container.querySelector('.markban-columns')).not.toBeNull());
+    expect(box.value).toBe('');
+    await fireEvent.input(box, { target: { value: 'zzz' } });
+    await waitFor(() => expect(screen.getByText('0 hit(s)')).toBeTruthy());
+    await fireEvent.keyDown(box, { key: 'Escape' });
+    await waitFor(() => expect(container.querySelector('.markban-columns')).not.toBeNull());
+  });
+
+  test('a plain board view without files searches ids and titles only', async () => {
+    const { container } = render(Markban, { board: demo.view });
+    await fireEvent.input(screen.getByRole('searchbox'), { target: { value: 'viewer' } });
+    await waitFor(() => expect(screen.getByText('1 hit(s)')).toBeTruthy());
+    const hit = container.querySelector('.markban-search-cards .markban-card');
+    expect(hit?.getAttribute('data-card')).toBe('0003-board-ui');
+    expect(hit?.textContent).toContain('Done');
   });
 });

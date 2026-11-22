@@ -98,3 +98,38 @@ fn windows_separators_and_dot_prefix_are_accepted() {
     assert_eq!(view.title, "T");
     assert_eq!(view.columns.first().map(|c| c.cards.len()), Some(1));
 }
+
+#[test]
+fn search_finds_cards_columns_and_the_board() {
+    let files = read_files(&demo_dir());
+    let hits = markban_wasm::search(files, vec!["experiments".to_string()]).unwrap();
+    assert_eq!(hits.cards.len(), 2, "{hits:?}");
+    // The active card comes first, the archived one after, flagged.
+    assert_eq!(hits.cards[0].id, "0001-spec-draft");
+    assert!(!hits.cards[0].archived);
+    assert!(hits.cards[0].snippet.is_some());
+    assert_eq!(hits.cards[1].id, "0004-research");
+    assert!(hits.cards[1].archived);
+    // Every term is required.
+    let hits = markban_wasm::search(
+        read_files(&demo_dir()),
+        vec!["roadmap".to_string(), "ZZZ".to_string()],
+    )
+    .unwrap();
+    assert!(hits.cards.is_empty() && hits.columns.is_empty() && !hits.board);
+}
+
+#[test]
+fn search_without_a_usable_board_gives_empty_results() {
+    let hits = markban_wasm::search(vec![], vec!["anything".to_string()]).unwrap();
+    assert_eq!(hits.cards, Vec::new());
+    assert_eq!(hits.columns, Vec::new());
+    assert!(!hits.board);
+}
+
+#[test]
+fn search_refuses_too_many_terms_and_overlong_terms() {
+    let many: Vec<String> = (0..33).map(|i| format!("t{i}")).collect();
+    assert!(markban_wasm::search(vec![], many).is_err());
+    assert!(markban_wasm::search(vec![], vec!["a".repeat(257)]).is_err());
+}

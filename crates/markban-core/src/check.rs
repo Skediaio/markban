@@ -230,9 +230,24 @@ fn check_card<'a>(
             ),
             Some(order) => {
                 if let Some(column) = column {
-                    orders.entry((column, order)).or_default().push(&card.id);
+                    // Archived cards do not count for W002.
+                    if !card.is_archived() {
+                        orders.entry((column, order)).or_default().push(&card.id);
+                    }
                 }
             }
         },
+    }
+
+    match value(card, "archived") {
+        Err(e) => push(Code::E009, fm.line_of("archived"), e.to_string()),
+        // `value` returns `Ok(None)` for an absent key and for an empty one (both fine), and
+        // `Ok("true")` means archived; anything else counts as active (W003).
+        Ok(Some(v)) if v != "true" => push(
+            Code::W003,
+            fm.line_of("archived"),
+            format!("`archived` is '{v}' but only `true` is valid; the card counts as active"),
+        ),
+        Ok(_) => {}
     }
 }

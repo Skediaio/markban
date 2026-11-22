@@ -4,6 +4,32 @@ Decisions taken, newest first, each with its reason. Open decisions at the botto
 
 ## Taken
 
+### 2026-11-22: Search is a linear scan in core, no index
+
+`markban search` reads the parsed board and scans it: card ids, titles, descriptions, column ids and names,
+and the board title and description. A board is bounded (a server refuses runs past 5000 cards or 256 KiB per
+card) and typical boards are hundreds of cards, so the scan is milliseconds — an index would add a derived
+store to keep fresh, startup cost and a second thing that can drift from the files, to win nothing at this
+scale. The files stay the only truth. Terms are literal, case-insensitive substrings, all of them required
+(AND); no regex or wildcards, because a pattern language buys little for an agent and costs crash-safety and
+determinism. Archived cards are hits like any other, marked `(archived)`: search is how archived work stays
+findable — that is why cards are archived rather than deleted. One implementation in `markban-core`, exposed
+by the CLI (local scan), the server (`GET …/search?q=`) and the WASM package.
+
+### 2026-11-22: Archiving is a status in the card's frontmatter, not a directory
+
+Boards fill up with finished work; the archive is the optional key `archived: true` in `cards/<id>.md`.
+Chosen over an `archive/` directory because format B's core property is that every card change touches one
+card file: a move would break that, split the id namespace across two directories (a new card could take a
+parked id) and lose the card's column and order. The removal experiment of 2026-11-21 measured restoring a
+removed card, not a status, so its verdict stands: removal stays deletion. An archived card keeps a valid
+`column` — no exception on E007 — so a 0.1 tool that ignores `archived` still sees a valid board and treats
+the card as active, which is harmless; `column.remove` therefore counts archived cards and moves them with
+`move_to`, refusing without it ("column done still has 3 cards (2 archived); pass move_to"), and an
+unarchive to a removed column cannot happen. No date in the value: git history and the server log already
+record when; any value other than `true` is `W003` and the card counts as active. The format version stays
+0.1.
+
 ### 2026-11-21: The server has fixed resource limits and a bounded, clipped log
 
 A security review found that one client could exhaust the server: an unbounded log read whole on every

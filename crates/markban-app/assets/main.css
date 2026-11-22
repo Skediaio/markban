@@ -60,6 +60,53 @@ body {
 .board-head h1 { margin: 0 0 4px; font-size: 1.5rem; }
 .description { margin: 0 0 16px; color: var(--muted); white-space: pre-wrap; }
 
+.archived-toggle { display: inline-flex; align-items: center; gap: 6px; margin: 0 0 16px; font-size: 0.9rem; color: var(--muted); cursor: pointer; }
+.card.archived { opacity: 0.6; }
+.badge-archived {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.search { display: flex; align-items: center; gap: 6px; margin: 8px 0 16px; }
+.search-input {
+  font: inherit;
+  padding: 5px 12px;
+  min-width: 240px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+}
+.search-input:focus-visible { border-color: var(--accent); outline: none; }
+.search-input::placeholder { color: var(--muted); }
+/* The box clears through its own × button; WebKit's built-in one would duplicate it. */
+.search-input::-webkit-search-cancel-button { display: none; }
+.search-clear {
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+}
+.search-clear:hover, .search-clear:focus-visible { border-color: var(--accent); color: var(--text); outline: none; }
+
+.search-results { margin: 0 0 16px; }
+.search-count { margin: 0 0 10px; color: var(--muted); font-size: 0.9rem; }
+.search-cards { max-width: 560px; }
+.search-hint { color: var(--muted); }
+.hit-column { margin-left: 6px; color: var(--muted); font-size: 0.85rem; }
+.hit-archived { margin-left: 6px; color: var(--muted); font-size: 0.85rem; font-style: italic; }
+.search-extra { margin: 8px 0 0; color: var(--muted); font-size: 0.9rem; }
+
 .banner { padding: 10px 14px; border-radius: 8px; margin: 0 0 16px; }
 .banner ul { margin: 6px 0 0; padding-left: 20px; font-family: ui-monospace, monospace; font-size: 0.85rem; }
 .diagnostics { background: var(--warn-bg); color: var(--warn-text); }
@@ -122,6 +169,13 @@ body {
   cursor: pointer;
 }
 .card:hover, .card:focus-visible { border-color: var(--accent); outline: none; }
+.card-id {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, monospace;
+  font-size: 0.8em;
+}
 
 .overlay {
   position: fixed;

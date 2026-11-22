@@ -72,6 +72,27 @@ fn unknown_or_missing_column_goes_to_unsorted() {
 }
 
 #[test]
+fn archived_cards_leave_columns_and_unsorted_and_list_by_id() {
+    let b = board_with(&[
+        ("z", "title: Z\ncolumn: a\narchived: true"),
+        ("m", "title: M\ncolumn: a"),
+        ("a", "title: A\ncolumn: nope\narchived: true"),
+    ]);
+    let v = view(&b);
+    assert_eq!(ids(&v.archived), ["a", "z"]);
+    assert_eq!(ids(&v.columns.first().unwrap().cards), ["m"]);
+    assert!(v.unsorted.is_empty());
+    // an archived card still needs a valid column (E007 unchanged)
+    assert!(
+        v.diagnostics
+            .iter()
+            .any(|d| d.code.as_str() == "E007" && d.file == "cards/a.md"),
+        "{:?}",
+        v.diagnostics
+    );
+}
+
+#[test]
 fn view_has_title_description_and_serializes() {
     let b = board_with(&[("x", "title: X\ncolumn: a")]);
     let v = view(&b);
@@ -133,6 +154,23 @@ fn card_detail_tolerates_missing_keys_and_unknown_cards() {
 }
 
 #[test]
+fn card_detail_reports_archived_only_when_true() {
+    let b = board_with(&[
+        ("live", "title: Live\ncolumn: a"),
+        ("gone", "title: Gone\ncolumn: a\narchived: true"),
+    ]);
+    let active = markban_core::view::card(&b, "live").unwrap();
+    assert!(!active.archived);
+    // the key is absent from the JSON, so an active card serializes as before
+    let json = serde_json::to_string(&active).unwrap();
+    assert!(!json.contains("archived"), "{json}");
+    let archived = markban_core::view::card(&b, "gone").unwrap();
+    assert!(archived.archived);
+    let json = serde_json::to_string(&archived).unwrap();
+    assert!(json.contains("\"archived\":true"), "{json}");
+}
+
+#[test]
 fn card_description_strips_a_leading_crlf() {
     let board = b"---\nmarkban: 0.1\ntitle: T\ncolumns:\n  - id: a\n    name: A\n---\n";
     let cards = vec![(
@@ -143,5 +181,30 @@ fn card_description_strips_a_leading_crlf() {
     assert_eq!(
         markban_core::view::card(&b, "c").unwrap().description,
         "Text"
+    );
+}
+
+#[test]
+fn view_with_archived_keeps_archived_cards_in_their_column_position() {
+    let b = board_with(&[
+        ("a1", "title: A1\ncolumn: a\norder: 1"),
+        ("a2", "title: A2\ncolumn: a\norder: 2\narchived: true"),
+        ("a3", "title: A3\ncolumn: a\norder: 3"),
+        ("u", "title: U\ncolumn: nope\narchived: true"),
+    ]);
+    let v = markban_core::view::view_with_archived(&b);
+    let col = v.columns.first().unwrap();
+    assert_eq!(ids(&col.cards), ["a1", "a2", "a3"]);
+    let flags: Vec<bool> = col.cards.iter().map(|c| c.archived).collect();
+    assert_eq!(flags, [false, true, false]);
+    assert_eq!(ids(&v.unsorted), ["u"]);
+    assert!(v.archived.is_empty());
+    // the plain view is unchanged and serializes no `archived` on summaries
+    let plain = view(&b);
+    assert_eq!(ids(&plain.columns.first().unwrap().cards), ["a1", "a3"]);
+    assert!(
+        !serde_json::to_string(&plain.columns)
+            .unwrap()
+            .contains("archived")
     );
 }

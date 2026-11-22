@@ -21,11 +21,17 @@ export default { plugins: [markban(), sveltekit()] };
 
 ## `<Markban {board} headingLevel={2} />`
 
-- `board`: what the `markban:` import gives (`{ view, cards, descriptionHtml }`). A plain `BoardView` (from
-  `@markban/core`) also works; its cards then open without a description.
+- `board`: what the `markban:` import gives (`{ view, cards, descriptionHtml, files }`). A plain `BoardView` (from
+  `@markban/core`) also works; its cards then open without a description, and the search box filters ids and titles
+  only (no raw files for a full-text search).
 - Renders the title, a notice for diagnostics, the columns with counts and an `Unsorted` column when a card has no
   valid column. Empty columns say so. Columns scroll and snap sideways on narrow screens. Light and dark follow
   `prefers-color-scheme`.
+- A search box in the header runs the engine's full-text search (`@markban/core` `search`) over the board's files,
+  debounced; while a query is active the columns are replaced by the hits — card buttons (with the column name and
+  an `(archived)` marker), small lines for column and board hits, and the `N hit(s)` count. Escape or the × button
+  clears the query and brings the board back. In the browser this loads the `@markban/core` wasm (`await init()`),
+  so a bundler must be able to resolve its `.wasm` asset (with Vite: `optimizeDeps: { exclude: ['@markban/core'] }`).
 - A card is a button. It opens a native modal `<dialog>` with the card title, its column and its description.
   Escape, the Close button and a click on the backdrop close it; focus returns to the card.
 - Styling reuses `remark-markban/style.css` (imported through `@markban/svelte/style.css`, which the component loads
@@ -36,8 +42,9 @@ export default { plugins: [markban(), sveltekit()] };
 
 - `import board from 'markban:<path>'` resolves `<path>` against the Vite root (option `root` changes both the
   base and the boundary). A path that leaves the root, also through a symbolic link, fails the build with one line.
-- The virtual module exports `{ view, cards, descriptionHtml }` as default and by name. `cards` maps a card id to
-  `{ title, column, html }`: `column` is the column name, `html` the description as HTML. It is built with
+- The virtual module exports `{ view, cards, descriptionHtml, files }` as default and by name. `cards` maps a card
+  id to `{ title, column, html }`: `column` is the column name, `html` the description as HTML (archived cards
+  included). `files` are the board's raw files, for the component's full-text search. It is built with
   `loadBoard`/`openBoard` of `@markban/core`.
 - `html` goes through the sanitiser of `remark-markban`: raw HTML dropped, only http, https, mailto, tel and relative
   links keep their target, images become their alt text, `{`, `}` and backticks are entities. The component only

@@ -43,6 +43,7 @@ describe('markban() Vite plugin', () => {
     expect(id).toMatch(/^\0markban:/);
     const code = await plugin.load.call(ctx, id);
     expect(code).toContain('export default');
+    expect(code).toMatch(/export const \{[^}]*\bfiles\b[^}]*\} = board/);
     const data = JSON.parse(code.split('\n')[0].replace(/^const board = /, '').replace(/;$/, ''));
     expect(data.view.title).toBe('Markban roadmap');
     expect(Object.values(data.cards)[0]).toHaveProperty('html');
@@ -139,6 +140,8 @@ describe('markban() Vite plugin', () => {
     const first = await server.ssrLoadModule('markban:boards/roadmap');
     expect(first.default.view.title).toBe('Markban roadmap');
     expect(first.view).toBe(first.default.view);
+    expect(first.files).toBe(first.default.files);
+    expect(first.files.length).toBeGreaterThan(0);
 
     const sent = [];
     const original = server.ws.send.bind(server.ws);

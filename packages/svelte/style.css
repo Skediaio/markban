@@ -20,6 +20,57 @@
   border-radius: 4px;
 }
 
+.markban-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+.markban-search-input {
+  font: inherit;
+  padding: 4px 10px;
+  min-width: 220px;
+  border: 1px solid var(--markban-border);
+  border-radius: 6px;
+  background: var(--markban-surface);
+  color: inherit;
+}
+.markban-search-input:focus-visible {
+  outline: 2px solid var(--markban-accent);
+  outline-offset: 1px;
+}
+.markban-search-input::placeholder { color: var(--markban-muted); }
+/* The box clears through its own × button; WebKit's built-in one would duplicate it. */
+.markban-search-input::-webkit-search-cancel-button { display: none; }
+.markban-search-clear {
+  padding: 2px 10px;
+  border: 1px solid var(--markban-border);
+  border-radius: 6px;
+  background: var(--markban-column);
+  color: inherit;
+  font: inherit;
+  font-size: 1.1rem;
+  line-height: 1.3;
+  cursor: pointer;
+}
+.markban-search-clear:focus-visible {
+  outline: 2px solid var(--markban-accent);
+  outline-offset: 2px;
+}
+
+.markban-search-results { margin: 0 0 16px; }
+.markban-search-count { margin: 0 0 10px; color: var(--markban-muted); font-size: 0.9rem; }
+.markban-search-cards { max-width: 40rem; }
+.markban-hit-id { color: var(--markban-muted); font-family: ui-monospace, monospace; font-size: 0.8em; }
+.markban-hit-column { margin-left: 6px; color: var(--markban-muted); font-size: 0.85rem; }
+.markban-hit-archived {
+  margin-left: 6px;
+  color: var(--markban-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+.markban-search-extra { margin: 8px 0 0; color: var(--markban-muted); font-size: 0.9rem; }
+
 .markban-dialog {
   width: min(40rem, calc(100vw - 32px));
   max-height: calc(100vh - 32px);

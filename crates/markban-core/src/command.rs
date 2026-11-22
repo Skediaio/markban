@@ -72,6 +72,10 @@ pub enum Command {
     },
     #[serde(rename = "card.remove")]
     CardRemove { id: String },
+    #[serde(rename = "card.archive")]
+    CardArchive { id: String },
+    #[serde(rename = "card.unarchive")]
+    CardUnarchive { id: String },
     #[serde(rename = "column.add")]
     ColumnAdd {
         name: String,
@@ -142,10 +146,19 @@ pub enum CommandError {
         "anchor card '{0}' has no valid `order`; anchor on a card that has one, or add to the end"
     )]
     AnchorUnordered(String),
+    #[error("card '{0}' is archived; run card.unarchive first")]
+    CardArchived(String),
+    #[error("anchor card '{0}' is archived; anchor on an active card or run card.unarchive first")]
+    AnchorArchived(String),
     #[error(
-        "column '{column}' still has {count} card(s); move or remove them first, or pass `move_to` with another column"
+        "column '{column}' still has {count} card(s){}; move or remove them first, or pass `move_to` with another column",
+        archived_part(.archived)
     )]
-    ColumnInUse { column: String, count: usize },
+    ColumnInUse {
+        column: String,
+        count: usize,
+        archived: usize,
+    },
     #[error(
         "card '{id}' changed since it was read (`if_unchanged` does not match); show it again and retry"
     )]
@@ -175,6 +188,16 @@ fn flat(text: &str) -> String {
         out.push('…');
     }
     out
+}
+
+/// The archived share of a [`CommandError::ColumnInUse`] message: `" (N archived)"` when the
+/// column has archived cards, empty otherwise.
+fn archived_part(archived: &usize) -> String {
+    if *archived > 0 {
+        format!(" ({archived} archived)")
+    } else {
+        String::new()
+    }
 }
 
 fn summarize(diagnostics: &[Diagnostic]) -> String {
@@ -333,6 +356,14 @@ fn apply_command(board: &mut Board, cmd: &Command) -> Result<Outcome, CommandErr
                 .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
             id.clone()
         }
+        Command::CardArchive { id } => {
+            card_archive(board, id)?;
+            id.clone()
+        }
+        Command::CardUnarchive { id } => {
+            card_unarchive(board, id)?;
+            id.clone()
+        }
         Command::ColumnAdd { name, id, before } => {
             column_add(board, name, id.as_deref(), before.as_deref())?
         }
@@ -474,7 +505,8 @@ fn card_order(card: &CardFile) -> Option<Decimal> {
     Decimal::parse(&card.get("order")?.ok()?)
 }
 
-/// Cards of `column` except `exclude`, in spec sort order, with their valid order.
+/// Active cards of `column` except `exclude`, in spec sort order, with their valid order.
+/// Archived cards are invisible: they are not neighbours, not top or end anchors.
 fn column_cards(
     board: &Board,
     column: &str,
@@ -484,7 +516,9 @@ fn column_cards(
         .cards
         .iter()
         .filter(|(id, card)| {
-            Some(id.as_str()) != exclude && card_column(card).as_deref() == Some(column)
+            Some(id.as_str()) != exclude
+                && card_column(card).as_deref() == Some(column)
+                && !card.is_archived()
         })
         .map(|(id, card)| (id.clone(), card_order(card)))
         .collect();
@@ -522,6 +556,7 @@ fn allocate(
     let Some(at) = cards.iter().position(|c| &c.0 == anchor) else {
         return Err(match board.cards.get(anchor) {
             None => CommandError::UnknownCard(flat(anchor)),
+            Some(card) if card.is_archived() => CommandError::AnchorArchived(anchor.clone()),
             Some(card) => CommandError::AnchorElsewhere {
                 anchor: anchor.clone(),
                 column: card_column(card).unwrap_or_default(),
@@ -644,6 +679,9 @@ fn card_move(
     if card.frontmatter.is_none() {
         return Err(CommandError::CardBroken { id: id.to_string() });
     }
+    if card.is_archived() {
+        return Err(CommandError::CardArchived(flat(id)));
+    }
     let current = card_column(card);
     if column.is_none() && pos.is_none() {
         return Err(CommandError::Invalid(
@@ -665,6 +703,46 @@ fn card_move(
         set(card, "column", &target)?;
     }
     set_order(card, order.as_ref())
+}
+
+/// `card.archive`: sets `archived: true`; the card keeps its column, order and everything else.
+fn card_archive(board: &mut Board, id: &str) -> Result<(), CommandError> {
+    let card = board
+        .cards
+        .get(id)
+        .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
+    if card.frontmatter.is_none() {
+        return Err(CommandError::CardBroken { id: id.to_string() });
+    }
+    if card.is_archived() {
+        return Err(CommandError::Invalid(format!(
+            "card '{id}' is already archived"
+        )));
+    }
+    let card = board
+        .cards
+        .get_mut(id)
+        .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
+    set(card, "archived", "true")
+}
+
+/// `card.unarchive`: removes the `archived` key line. Column and order are untouched, so the
+/// card returns exactly to its old place.
+fn card_unarchive(board: &mut Board, id: &str) -> Result<(), CommandError> {
+    let card = board
+        .cards
+        .get_mut(id)
+        .ok_or_else(|| CommandError::UnknownCard(flat(id)))?;
+    if card.frontmatter.is_none() {
+        return Err(CommandError::CardBroken { id: id.to_string() });
+    }
+    if !card.is_archived() {
+        return Err(CommandError::Invalid(format!(
+            "card '{id}' is not archived"
+        )));
+    }
+    broken(card)?.remove("archived");
+    Ok(())
 }
 
 fn card_edit(
@@ -758,12 +836,32 @@ fn column_remove(
     move_to: Option<&str>,
 ) -> Result<String, CommandError> {
     let column = resolve_column(board, column)?;
-    let members = column_cards(board, &column, None);
+    // Every card of the column, archived included (they count for the refusal and move along).
+    // Active cards come first in their sort order (so they keep their relative order at the
+    // target), then the archived ones by id.
+    let mut members: Vec<String> = column_cards(board, &column, None)
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect();
+    members.extend(
+        board
+            .cards
+            .iter()
+            .filter(|(_, card)| {
+                card.is_archived() && card_column(card).as_deref() == Some(column.as_str())
+            })
+            .map(|(id, _)| id.clone()),
+    );
     if !members.is_empty() {
+        let archived = members
+            .iter()
+            .filter(|id| board.cards.get(*id).is_some_and(CardFile::is_archived))
+            .count();
         let Some(target) = move_to else {
             return Err(CommandError::ColumnInUse {
                 column,
                 count: members.len(),
+                archived,
             });
         };
         let target = resolve_column(board, target)?;
@@ -772,8 +870,19 @@ fn column_remove(
                 "`move_to` cannot be the column being removed itself ('{column}'); pick another column"
             )));
         }
-        for (id, _) in members {
-            card_move(board, &id, Some(&target), Some(Position::End))?;
+        for id in members {
+            let is_archived = board.cards.get(&id).is_some_and(CardFile::is_archived);
+            if is_archived {
+                // `card_move` refuses archived cards; they only change their `column` key and
+                // keep their order, so unarchiving puts them back in place.
+                let card = board
+                    .cards
+                    .get_mut(&id)
+                    .ok_or_else(|| CommandError::UnknownCard(flat(&id)))?;
+                set(card, "column", &target)?;
+            } else {
+                card_move(board, &id, Some(&target), Some(Position::End))?;
+            }
         }
     } else if let Some(target) = move_to {
         resolve_column(board, target)?;

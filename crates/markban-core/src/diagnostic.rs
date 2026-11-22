@@ -17,6 +17,7 @@ pub enum Code {
     E009,
     W001,
     W002,
+    W003,
 }
 
 impl Code {
@@ -34,13 +35,14 @@ impl Code {
             Self::E009 => "E009",
             Self::W001 => "W001",
             Self::W002 => "W002",
+            Self::W003 => "W003",
         }
     }
 
     #[must_use]
     pub const fn severity(self) -> Severity {
         match self {
-            Self::W001 | Self::W002 => Severity::Warning,
+            Self::W001 | Self::W002 | Self::W003 => Severity::Warning,
             _ => Severity::Error,
         }
     }

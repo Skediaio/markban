@@ -4,6 +4,7 @@ import * as wasm from '../wasm/markban_wasm.js';
 /** @typedef {import('./types.js').BoardView} BoardView */
 /** @typedef {import('./types.js').CardDetail} CardDetail */
 /** @typedef {import('./types.js').Diagnostic} Diagnostic */
+/** @typedef {import('./types.js').SearchResults} SearchResults */
 
 let ready = false;
 
@@ -53,4 +54,17 @@ export function card(files, id) {
 export function check(files) {
   assertReady();
   return wasm.check(files);
+}
+
+/**
+ * Full-board search: a hit must contain every term (case-insensitive, literal substring) in
+ * the union of its fields (a card's id, title and description; a column's id and name; the
+ * board title and description). A board without a usable `board.md` gives empty results.
+ * @param {BoardFile[]} files
+ * @param {string[]} terms
+ * @returns {SearchResults}
+ */
+export function search(files, terms) {
+  assertReady();
+  return wasm.search(files, terms);
 }
